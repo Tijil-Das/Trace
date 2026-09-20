@@ -22,7 +22,7 @@ internal sealed partial class CaptureEngine
             _index?.Dispose();
 
             _day = day;
-            (_session, _log, _manifest, _index) = SessionOpener.Open(_config, day);
+            (_session, _log, _manifest, _index) = SessionOpener.Open(_config, day, _source.Monitors);
             _assetWriter = new AssetWriteQueue(_session.Assets);
             _session.UpdateMonitors(_source.Monitors, DateTimeOffset.Now);
             _stats.SessionsRolled++;

@@ -157,7 +157,10 @@ internal sealed partial class CaptureController
                 LastHashMs: 0,
                 LastEncodeMs: 0,
                 LastStoreMs: 0,
-                LastLogMs: 0);
+                LastLogMs: 0,
+                LogZeroRecordFaults: 0,
+                LogExternalWriterDetected: false,
+                AssetQueueDepth: 0);
         }
 
         CaptureStats stats = engine.Stats;
@@ -205,7 +208,10 @@ internal sealed partial class CaptureController
             LastHashMs: stats.LastHashMs,
             LastEncodeMs: stats.LastEncodeMs,
             LastStoreMs: stats.LastStoreMs,
-            LastLogMs: stats.LastLogMs);
+            LastLogMs: stats.LastLogMs,
+            LogZeroRecordFaults: stats.LogZeroRecordFaults,
+            LogExternalWriterDetected: stats.LogExternalWriterDetected,
+            AssetQueueDepth: stats.AssetQueueDepth);
 
     }
 

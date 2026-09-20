@@ -25,6 +25,9 @@ internal sealed class CommandLine
 
     internal string ConfigPath { get; private set; } = RecallConfig.DefaultConfigPath();
 
+    /// <summary>True when the user named a config file explicitly (so its storage path is honoured).</summary>
+    internal bool ConfigExplicit { get; private set; }
+
     internal string? RootOverride { get; private set; }
 
     internal string[] Raw { get; private set; } = Array.Empty<string>();
@@ -79,6 +82,7 @@ internal sealed class CommandLine
                     if (i + 1 < args.Length)
                     {
                         result.ConfigPath = args[++i];
+                        result.ConfigExplicit = true;
                     }
 
                     break;

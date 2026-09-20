@@ -43,6 +43,8 @@ internal sealed partial class CaptureEngine : IDisposable
     private long _lastPruneMs;
     private long _lastDiskCheckMs;
     private long _lastFullRescanMs;
+    private long _lastGroundTruthMs;
+    private bool _owedRescan;
     private long _lastAssetStatsMs;
     private long _cachedAssetCount;
     private long _cachedAssetBytes;
@@ -65,7 +67,7 @@ internal sealed partial class CaptureEngine : IDisposable
         _tileScratch = new byte[Math.Max(_config.TileSize * _config.TileSize * 4, 64 * 64 * 4)];
         _day = DateOnly.FromDateTime(DateTimeOffset.Now.LocalDateTime);
 
-        (_session, _log, _manifest, _index) = SessionOpener.Open(_config, _day);
+        (_session, _log, _manifest, _index) = SessionOpener.Open(_config, _day, _source.Monitors);
         _assetWriter = new AssetWriteQueue(_session.Assets);
         SeedCanvasFromLatestCheckpoint();
     }

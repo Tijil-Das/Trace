@@ -58,6 +58,12 @@ internal sealed class CaptureStats
     /// <summary>Tile payloads queued for the background writer and not yet on disk.</summary>
     internal int AssetQueueDepth { get; set; }
 
+    /// <summary>Log records dropped because they were zero-filled (writer integrity faults).</summary>
+    internal long LogZeroRecordFaults { get; set; }
+
+    /// <summary>True when something outside this writer was appending to the log file.</summary>
+    internal bool LogExternalWriterDetected { get; set; }
+
     internal long FullFrameRescans { get; set; }
 
     internal long TilesHashed { get; set; }
@@ -78,6 +84,9 @@ internal sealed class CaptureStats
 
     /// <summary>Result of the last maintenance pass (pruning/GC), for the dashboard.</summary>
     internal string? LastMaintenance { get; set; }
+
+    /// <summary>Set when the capture loop faulted; the CLI prints its full stack for diagnosis.</summary>
+    internal Exception? FatalException { get; set; }
 
     internal string? ForegroundApp { get; set; }
 

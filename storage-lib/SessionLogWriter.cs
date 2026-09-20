@@ -11,6 +11,7 @@ public sealed class SessionLogWriter : IDisposable
 
     private readonly FileStream _stream;
     private readonly byte[] _entries;
+    private readonly object _gate = new();
     private int _buffered;
     private bool _disposed;
 
@@ -23,12 +24,17 @@ public sealed class SessionLogWriter : IDisposable
 
         if (!exists || _stream.Length < SessionLogFormat.HeaderSize)
         {
-            _stream.Write(SessionLogFormat.CreateHeaderBytes(dayStartLocal));
+            byte[] header = SessionLogFormat.CreateHeaderBytes(dayStartLocal);
+            _stream.Write(header);
+            HeaderBytesWritten = header.Length;
             IsNewFile = true;
         }
 
         FilePath = path;
+        _initialLength = _stream.Length;
     }
+
+    private readonly long _initialLength;
 
     /// <summary>Path of this log segment.</summary>
     public string FilePath { get; }
@@ -42,19 +48,39 @@ public sealed class SessionLogWriter : IDisposable
     /// <summary>Entry bytes appended through this writer.</summary>
     public long EntryBytesWritten { get; private set; }
 
+    /// <summary>Header bytes this writer wrote at creation time (0 when appending to an existing file).</summary>
+    private int HeaderBytesWritten { get; set; }
     /// <summary>Flushed length plus buffered entries.</summary>
     public long FileLength => _stream.Length + _buffered;
+
+    /// <summary>
+    /// Records that were all zeros when they reached the disk. A real entry always carries a non-zero
+    /// timestamp, so any such record means the buffer was written before it was filled — corruption
+    /// that a reader would otherwise silently treat as the end of the log.
+    /// </summary>
+    public long ZeroRecordFaults { get; private set; }
 
     /// <summary>Appends one entry; flushes to disk when the internal buffer fills.</summary>
     public void Append(in LogEntry entry)
     {
-        LogEntry.Write(_entries.AsSpan(_buffered), entry);
-        _buffered += LogEntry.Size;
-        EntriesWritten++;
-        EntryBytesWritten += LogEntry.Size;
-        if (_buffered == _entries.Length)
+        // Flush() is reachable from control paths (pause, purge, dispose) while the capture loop is
+        // appending, so writer state is serialized: a torn buffer write here would put zero records
+        // into the middle of the log.
+        lock (_gate)
         {
-            DrainBuffer();
+            if (_disposed)
+            {
+                return;
+            }
+
+            LogEntry.Write(_entries.AsSpan(_buffered), entry);
+            _buffered += LogEntry.Size;
+            EntriesWritten++;
+            EntryBytesWritten += LogEntry.Size;
+            if (_buffered == _entries.Length)
+            {
+                DrainBuffer();
+            }
         }
     }
 
@@ -70,28 +96,42 @@ public sealed class SessionLogWriter : IDisposable
     /// <summary>Flushes buffered entries to the file, always ending on a record boundary.</summary>
     public void Flush()
     {
-        DrainBuffer();
-        _stream.Flush(flushToDisk: false);
+        lock (_gate)
+        {
+            DrainBuffer();
+            _stream.Flush(flushToDisk: false);
+            VerifyFileLength();
+        }
     }
 
     public void Dispose()
     {
-        if (_disposed)
+        lock (_gate)
         {
-            return;
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        _disposed = true;
-        try
-        {
-            Flush();
-        }
-        finally
-        {
-            _stream.Dispose();
+            _disposed = true;
+            try
+            {
+                DrainBuffer();
+                _stream.Flush(flushToDisk: true);
+            }
+            finally
+            {
+                _stream.Dispose();
+            }
         }
     }
 
+    /// <summary>
+    /// Writes the buffered records, skipping any that are entirely zero. A real entry always carries a
+    /// non-zero timestamp, so an all-zero record is a hole rather than data; dropping it keeps the log
+    /// self-consistent (a phantom "empty tile" record would render as a hole in playback), and the
+    /// engine's next checkpoint or rescan re-references whatever tile it described.
+    /// </summary>
     private void DrainBuffer()
     {
         if (_buffered == 0)
@@ -99,7 +139,55 @@ public sealed class SessionLogWriter : IDisposable
             return;
         }
 
-        _stream.Write(_entries, 0, _buffered);
+        int writeStart = 0;
+        for (int offset = 0; offset < _buffered; offset += LogEntry.Size)
+        {
+            if (!IsZeroRecord(_entries.AsSpan(offset, LogEntry.Size)))
+            {
+                continue;
+            }
+
+            ZeroRecordFaults++;
+            if (offset > writeStart)
+            {
+                _stream.Write(_entries, writeStart, offset - writeStart);
+            }
+
+            writeStart = offset + LogEntry.Size;
+        }
+
+        if (_buffered > writeStart)
+        {
+            _stream.Write(_entries, writeStart, _buffered - writeStart);
+        }
+
         _buffered = 0;
+    }
+
+    /// <summary>True when the file grew (or shrank) by anything other than what this writer appended.</summary>
+    public bool ExternalWriterDetected { get; private set; }
+
+    private static bool IsZeroRecord(ReadOnlySpan<byte> record)
+    {
+        foreach (byte value in record)
+        {
+            if (value != 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private void VerifyFileLength()
+    {
+        // Length at open + whatever this writer added: anything else means a second handle (or another
+        // process) is appending to the same log, which no amount of internal locking can protect.
+        long expected = _initialLength + HeaderBytesWritten + EntryBytesWritten;
+        if (_stream.Length != expected)
+        {
+            ExternalWriterDetected = true;
+        }
     }
 }

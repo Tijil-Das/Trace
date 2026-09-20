@@ -7,10 +7,14 @@ internal static class SessionOpener
 {
     internal static (SessionStore Session, SessionLogWriter Log, AssetManifestWriter Manifest, RecallIndex? Index) Open(
         RecallConfig config,
-        DateOnly day)
+        DateOnly day,
+        IReadOnlyList<MonitorInfo>? monitors = null)
     {
         SessionStore session = SessionStore.Open(config.StoragePath, day, config.TileSize);
-        session.UpdateMonitors(MonitorsFor(session), DateTimeOffset.Now);
+        if (monitors is { Count: > 0 })
+        {
+            session.UpdateMonitors(monitors, DateTimeOffset.Now);
+        }
 
         int segment = session.NextSegmentIndex();
         SessionLogWriter log = session.OpenLog(DayStart(day), segment);
@@ -30,11 +34,9 @@ internal static class SessionOpener
 
     /// <summary>Local midnight that a day's log belongs to.</summary>
     internal static DateTimeOffset DayStart(DateOnly day)
-        => DateTimeOffset.Parse($"{SessionLayout.DayName(day)}T00:00:00", System.Globalization.CultureInfo.InvariantCulture);
-
-    /// <summary>Monitor geometry recorded in the session meta (empty on a brand new session).</summary>
-    private static IReadOnlyList<MonitorInfo> MonitorsFor(SessionStore session)
-        => session.Meta.AllMonitors();
+        => DateTimeOffset.Parse(
+            $"{SessionLayout.DayName(day)}T00:00:00",
+            System.Globalization.CultureInfo.InvariantCulture);
 
     internal static RecallIndex? TryOpenIndex(string root)
     {

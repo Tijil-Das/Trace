@@ -18,9 +18,9 @@ internal static class OnceCommand
     internal static int Run(RecallConfig config, CommandLine commandLine)
     {
         RecallConfig effective = config.Clone().Normalize();
-        if (commandLine.RootOverride is null && !commandLine.Synthetic)
+        if (commandLine.RootOverride is null && !commandLine.Synthetic && !commandLine.ConfigExplicit)
         {
-            // Keep throwaway validation runs out of the real store unless a root was named explicitly.
+            // Throwaway validation runs stay out of the real store unless a root or config was named.
             effective.StoragePath = Path.Combine(
                 Path.GetTempPath(),
                 "screen-recall-once",
@@ -55,7 +55,7 @@ internal static class OnceCommand
 
             controller.Flush();
             StatusDto status = controller.GetStatus();
-            PrintSummary(status, clock.Elapsed, effective);
+            PrintSummary(status, clock.Elapsed, effective, controller.Engine);
             return 0;
         }
         finally
@@ -65,7 +65,7 @@ internal static class OnceCommand
         }
     }
 
-    private static void PrintSummary(StatusDto status, TimeSpan elapsed, RecallConfig config)
+    private static void PrintSummary(StatusDto status, TimeSpan elapsed, RecallConfig config, CaptureEngine? engine)
     {
         double seconds = Math.Max(1, elapsed.TotalSeconds);
         double tilesPerSecond = status.TilesHashed / seconds;
@@ -99,10 +99,18 @@ internal static class OnceCommand
         Console.WriteLine($"cpu (sampled)       : {status.CpuPercent:0.00}%");
         Console.WriteLine($"working set         : {status.WorkingSetMb:0} MB");
         Console.WriteLine($"canvas tiles        : {status.CanvasTiles}");
+        Console.WriteLine($"log integrity       : {status.LogZeroRecordFaults} zero record(s), external writer: {status.LogExternalWriterDetected}");
         Console.WriteLine($"retention           : {config.RetentionDays} day(s)");
         if (status.LastError is not null)
         {
             Console.WriteLine($"last error          : {status.LastError}");
+        }
+
+        if (engine?.Stats.FatalException is { } fatal)
+        {
+            Console.WriteLine();
+            Console.WriteLine("=== fatal ===");
+            Console.WriteLine(fatal.ToString());
         }
     }
 }

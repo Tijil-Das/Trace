@@ -14,41 +14,50 @@ public static partial class CheckpointFormat
             throw new InvalidDataException("Not a checkpoint file (bad magic).");
         }
 
-        long timestampUs = (long)BinaryPrimitives.ReadUInt64LittleEndian(buffer[8..]);
-        int monitorCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[16..]);
-        List<CheckpointMonitorState> states = new(monitorCount);
-        int p = HeaderSize;
+        using MemoryStream stream = new(buffer.ToArray(), writable: false);
+        using BinaryReader reader = new(stream);
+        stream.Position = 6;
+        byte version = reader.ReadByte();
+        if (version != Version)
+        {
+            throw new InvalidDataException($"Unsupported checkpoint version {version}.");
+        }
 
+        _ = reader.ReadByte(); // flags
+        long timestampUs = reader.ReadInt64();
+        int monitorCount = (int)reader.ReadUInt32();
+        _ = reader.ReadUInt32(); // reserved
+
+        List<CheckpointMonitorState> states = new(monitorCount);
         for (int m = 0; m < monitorCount; m++)
         {
-            if (p + MonitorHeaderSize > buffer.Length)
+            if (stream.Position + MonitorHeaderSize > stream.Length)
             {
                 throw new InvalidDataException("Truncated checkpoint (monitor header).");
             }
 
-            ushort id = BinaryPrimitives.ReadUInt16LittleEndian(buffer[p..]);
-            int tileSize = BinaryPrimitives.ReadUInt16LittleEndian(buffer[(p + 2)..]);
-            int x = BinaryPrimitives.ReadInt32LittleEndian(buffer[(p + 4)..]);
-            int y = BinaryPrimitives.ReadInt32LittleEndian(buffer[(p + 8)..]);
-            int width = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[(p + 12)..]);
-            int height = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[(p + 16)..]);
-            int columns = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[(p + 20)..]);
-            int rows = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[(p + 24)..]);
-            int entryCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[(p + 28)..]);
-            p += MonitorHeaderSize;
+            ushort id = reader.ReadUInt16();
+            int tileSize = reader.ReadUInt16();
+            int x = reader.ReadInt32();
+            int y = reader.ReadInt32();
+            int width = (int)reader.ReadUInt32();
+            int height = (int)reader.ReadUInt32();
+            int columns = (int)reader.ReadUInt32();
+            int rows = (int)reader.ReadUInt32();
+            int entryCount = (int)reader.ReadUInt32();
 
             MonitorInfo monitor = new(id, string.Empty, x, y, width, height, tileSize);
             ulong[] tiles = new ulong[Math.Max(columns * rows, 1)];
+
             for (int e = 0; e < entryCount; e++)
             {
-                if (p + TileEntrySize > buffer.Length)
+                if (stream.Position + TileEntrySize > stream.Length)
                 {
                     throw new InvalidDataException("Truncated checkpoint (tile entries).");
                 }
 
-                int index = (int)BinaryPrimitives.ReadUInt32LittleEndian(buffer[p..]);
-                ulong hash = BinaryPrimitives.ReadUInt64LittleEndian(buffer[(p + 4)..]);
-                p += TileEntrySize;
+                int index = (int)reader.ReadUInt32();
+                ulong hash = reader.ReadUInt64();
                 if (index >= 0 && index < tiles.Length)
                 {
                     tiles[index] = hash;

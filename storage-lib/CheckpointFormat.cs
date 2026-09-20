@@ -35,7 +35,8 @@ public sealed record CheckpointData(long TimestampUs, IReadOnlyList<CheckpointMo
 ///   7  uint8   flags (bit0: sparse tile entries)
 ///   8  uint64  timestamp_us
 ///  16  uint32  monitor count
-///  20  ... per monitor:
+///  20  uint32  reserved
+///  24  ... per monitor:
 ///        uint16 monitor_id, uint16 tile_size, int32 x, int32 y,
 ///        uint32 width, uint32 height, uint32 columns, uint32 rows, uint32 entry count,
 ///        then entry count x (uint32 tile index, uint64 asset hash)
@@ -50,11 +51,14 @@ public static partial class CheckpointFormat
     /// <summary>Current format version.</summary>
     public const byte Version = 1;
 
-    /// <summary>Header size in bytes.</summary>
-    public const int HeaderSize = 20;
+    /// <summary>Header size in bytes: magic(6) + version(1) + flags(1) + timestamp(8) + monitor count(4) + reserved(4).</summary>
+    public const int HeaderSize = 24;
 
-    /// <summary>Per-monitor fixed size in bytes.</summary>
-    public const int MonitorHeaderSize = 30;
+    /// <summary>
+    /// Fixed per-monitor header size: id(2) + tileSize(2) + x(4) + y(4) + width(4) + height(4) +
+    /// columns(4) + rows(4) + entry count(4) = 32 bytes, followed by 12 bytes per stored tile.
+    /// </summary>
+    public const int MonitorHeaderSize = 32;
 
     /// <summary>Bytes per stored tile entry.</summary>
     public const int TileEntrySize = 12;
@@ -70,37 +74,37 @@ public static partial class CheckpointFormat
         return long.TryParse(name, out timestampUs);
     }
 
-    /// <summary>Serializes a checkpoint.</summary>
+    /// <summary>
+    /// Serializes a checkpoint. Written through a BinaryWriter rather than hand-rolled offsets: the
+    /// buffer size and the write path must never be able to disagree, which is exactly the class of bug
+    /// a manual layout invites.
+    /// </summary>
     public static byte[] Serialize(long timestampUs, IReadOnlyList<CheckpointMonitorState> monitors)
     {
-        int size = HeaderSize;
-        foreach (CheckpointMonitorState state in monitors)
-        {
-            size += MonitorHeaderSize + (CountNonEmpty(state.Tiles) * TileEntrySize);
-        }
+        using MemoryStream stream = new();
+        using BinaryWriter writer = new(stream);
 
-        byte[] buffer = new byte[size];
-        Span<byte> span = buffer;
-        "SRCKP1"u8.CopyTo(span);
-        span[6] = Version;
-        span[7] = 1;
-        BinaryPrimitives.WriteUInt64LittleEndian(span[8..], (ulong)timestampUs);
-        BinaryPrimitives.WriteUInt32LittleEndian(span[16..], (uint)monitors.Count);
-        int p = HeaderSize;
+        Span<byte> magic = stackalloc byte[6];
+        "SRCKP1"u8.CopyTo(magic);
+        writer.Write(magic);
+        writer.Write(Version);
+        writer.Write((byte)1); // flags: sparse tile entries
+        writer.Write(timestampUs);
+        writer.Write((uint)monitors.Count);
+        writer.Write(0u); // reserved
 
         foreach (CheckpointMonitorState state in monitors)
         {
             MonitorInfo monitor = state.Monitor;
-            BinaryPrimitives.WriteUInt16LittleEndian(span[p..], monitor.Id);
-            BinaryPrimitives.WriteUInt16LittleEndian(span[(p + 2)..], (ushort)monitor.TileSize);
-            BinaryPrimitives.WriteInt32LittleEndian(span[(p + 4)..], monitor.X);
-            BinaryPrimitives.WriteInt32LittleEndian(span[(p + 8)..], monitor.Y);
-            BinaryPrimitives.WriteUInt32LittleEndian(span[(p + 12)..], (uint)monitor.Width);
-            BinaryPrimitives.WriteUInt32LittleEndian(span[(p + 16)..], (uint)monitor.Height);
-            BinaryPrimitives.WriteUInt32LittleEndian(span[(p + 20)..], (uint)monitor.Columns);
-            BinaryPrimitives.WriteUInt32LittleEndian(span[(p + 24)..], (uint)monitor.Rows);
-            BinaryPrimitives.WriteUInt32LittleEndian(span[(p + 28)..], (uint)CountNonEmpty(state.Tiles));
-            p += MonitorHeaderSize;
+            writer.Write(monitor.Id);
+            writer.Write((ushort)monitor.TileSize);
+            writer.Write(monitor.X);
+            writer.Write(monitor.Y);
+            writer.Write((uint)monitor.Width);
+            writer.Write((uint)monitor.Height);
+            writer.Write((uint)monitor.Columns);
+            writer.Write((uint)monitor.Rows);
+            writer.Write((uint)CountNonEmpty(state.Tiles));
 
             for (int index = 0; index < state.Tiles.Length; index++)
             {
@@ -110,13 +114,13 @@ public static partial class CheckpointFormat
                     continue;
                 }
 
-                BinaryPrimitives.WriteUInt32LittleEndian(span[p..], (uint)index);
-                BinaryPrimitives.WriteUInt64LittleEndian(span[(p + 4)..], hash);
-                p += TileEntrySize;
+                writer.Write((uint)index);
+                writer.Write(hash);
             }
         }
 
-        return buffer;
+        writer.Flush();
+        return stream.ToArray();
     }
 
     /// <summary>Writes a checkpoint atomically (temp file + rename).</summary>

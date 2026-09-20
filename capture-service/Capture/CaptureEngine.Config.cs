@@ -57,7 +57,7 @@ internal sealed partial class CaptureEngine
             _canvas.Clear();
             _dedupe.Clear();
             _config.StoragePath = newRoot;
-            (_session, _log, _manifest, _index) = SessionOpener.Open(_config, _day);
+            (_session, _log, _manifest, _index) = SessionOpener.Open(_config, _day, _source.Monitors);
             _assetWriter = new AssetWriteQueue(_session.Assets);
             SeedCanvasFromLatestCheckpoint();
             _forceFullRescan = true;
@@ -107,6 +107,19 @@ internal sealed partial class CaptureEngine
             _assetWriter?.Drain(TimeSpan.FromSeconds(5));
             _log?.Flush();
             _manifest?.Flush();
+
+            if (_log is not null)
+            {
+                _stats.LogZeroRecordFaults = _log.ZeroRecordFaults;
+                _stats.LogExternalWriterDetected = _log.ExternalWriterDetected;
+                if (_log.ZeroRecordFaults > 0 || _log.ExternalWriterDetected)
+                {
+                    _stats.LastError = $"log integrity: {_log.ZeroRecordFaults} zero record(s) dropped"
+                                       + (_log.ExternalWriterDetected
+                                           ? "; another writer is appending to the log file"
+                                           : string.Empty);
+                }
+            }
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {

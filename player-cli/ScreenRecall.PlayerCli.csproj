@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>ScreenRecall.PlayerCli</RootNamespace>
+    <AssemblyName>ScreenRecall.PlayerCli</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\player-lib\ScreenRecall.Player.csproj" />
+    <ProjectReference Include="..\storage-lib\ScreenRecall.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

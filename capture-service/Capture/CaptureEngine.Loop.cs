@@ -98,7 +98,8 @@ internal sealed partial class CaptureEngine
     /// <summary>Records a fatal error from outside the loop (used by the host when the task faults).</summary>
     internal void ReportFatal(Exception exception)
     {
-        _stats.LastError = $"capture loop stopped: {exception.GetType().Name}: {exception.Message}";
+        _stats.LastError = $"capture loop stopped: {exception}";
+        _stats.FatalException = exception;
         FlushSessionState();
     }
 

@@ -39,19 +39,30 @@ internal sealed partial class CaptureEngine
         _stats.LastDirtyRects = frame.DirtyRects.Count;
         _stats.LastMoveRects = frame.MoveRects.Count;
 
+        // A deferred rescan is an owed rescan, never a dropped one. Until it is honoured the canvas
+        // cannot be trusted, so no frame is processed (the screen would look settled while it is not),
+        // and once the rate limit allows, the very next frame is rescanned in full even if DXGI
+        // reported a handful of dirty rects.
+        if (_owedRescan && nowMs - _lastFullRescanMs < FullRescanMinIntervalMs)
+        {
+            _stats.FramesRescanDeferred++;
+            return false;
+        }
+
         _cells.Clear();
         bool fullRescan;
-        if (_forceFullRescan)
+        if (_forceFullRescan || _owedRescan)
         {
             fullRescan = true;
+            _owedRescan = false;
         }
         else if (frame.FullRescan)
         {
-            // The compositor presented without reporting regions. Rescanning the whole surface is the
-            // only correct answer, but doing it on every pointer-driven present would burn the CPU
-            // budget, so it is rate limited; dirty-rect frames are never delayed by this.
+            // Presented with no region list at all: cursor or layered-overlay driven. Rescan in full,
+            // but rate limit it so a pointer-only present cannot pin the CPU.
             if (nowMs - _lastFullRescanMs < FullRescanMinIntervalMs)
             {
+                _owedRescan = true;
                 _stats.FramesRescanDeferred++;
                 return false;
             }
@@ -93,8 +104,11 @@ internal sealed partial class CaptureEngine
         int changes = ProcessTiles(frame, canvas, foreground.Id, timestampUs);
         _stats.LastFrameUtc = DateTimeOffset.UtcNow;
 
-        if (_config.CaptureGroundTruth)
+        if (_config.CaptureGroundTruth && nowMs - _lastGroundTruthMs >= 1000)
         {
+            // Ground-truth frames are 4 MB apiece, so the harness samples about one per second
+            // instead of one per frame — plenty to prove reconstruction fidelity (spec 12).
+            _lastGroundTruthMs = nowMs;
             WriteGroundTruth(frame, timestampUs);
         }
 

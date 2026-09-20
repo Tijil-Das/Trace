@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>ScreenRecall.Player</RootNamespace>
+    <AssemblyName>ScreenRecall.Player</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\storage-lib\ScreenRecall.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -112,7 +112,10 @@ internal sealed record StatusDto(
     double LastHashMs,
     double LastEncodeMs,
     double LastStoreMs,
-    double LastLogMs);
+    double LastLogMs,
+    long LogZeroRecordFaults,
+    bool LogExternalWriterDetected,
+    int AssetQueueDepth);
 
 internal sealed record PruneReportDto(
     int DaysDeleted,

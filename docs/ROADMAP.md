@@ -61,6 +61,11 @@ listed as missing.
 - **Crash window**: an entry is durable only at flush boundaries (≈2 s). A hard crash loses at most the last
   interval — and loses it consistently (neither the entries nor their tiles), which is the deliberate
   trade-off described in `docs/ARCHITECTURE.md`.
+- **A live view lags under heavy change.** The flush ordering means the log cannot run ahead of the tiles, so
+  while a source outruns the asset writer (a synthetic desktop at full speed, or a desktop changing many tiles
+  per frame) the visible log can trail by seconds, and a reader may show the running day as nearly empty.
+  Finishing the session or reading a past day is accurate. A "durable watermark" that lets the log flush up to
+  the tiles already written would remove the lag without weakening the ordering rule; it is not implemented.
 
 ## Engineering notes for whoever picks this up
 

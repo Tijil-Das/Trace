@@ -17,7 +17,7 @@ dashboard all exist and run; packaging is deliberately not done yet (see *Status
 | Storage subsystem | Working: content-addressable store, per-day reference log, checkpoints, per-day asset manifests, SQLite navigation index, retention pruning + asset GC, panic purge |
 | Player | Working: checkpoint + replay seek, reconstruction, PNG export, fidelity harness, integrity check, seek benchmark |
 | Dashboard | Working shell: day list, scrubber, play/pause/speed, frame view, jump-to-focus, live resource meter, settings, pause/resume, purge and prune, tray icon, global hotkey |
-| Tests | 35 xUnit tests green, including an end-to-end capture→replay→pixel-diff test |
+| Tests | 44 xUnit tests green, including an end-to-end capture→replay→pixel-diff test |
 | Encryption at rest | **Not implemented** (interface reserved; see ROADMAP) |
 | Text index, MP4 export | **Not implemented** (spec §7, optional) |
 | Installer (WiX/MSIX) | **Not started on purpose** — no packaging until the dev-mode build has been tested and signed off, per the project owner's instruction |
@@ -87,6 +87,41 @@ commands:
 ```powershell
 dotnet run --project capture-service -c Release -- --service-commands
 ```
+
+## Testing
+
+Prerequisite: the .NET 8 SDK. On this development machine the `dotnet` on `PATH` (`C:\Program Files\dotnet`) is
+a *runtime-only* install — `dotnet --list-sdks` prints nothing and every `dotnet build/test/run` fails with
+"No .NET SDKs were found". The SDK lives in `%LOCALAPPDATA%\Microsoft\dotnet`; prepend it (or call it by full
+path) before running anything:
+
+```powershell
+$env:PATH = "$env:LOCALAPPDATA\Microsoft\dotnet;$env:PATH"
+dotnet --version   # 8.0.425
+```
+
+| What | Command | What good looks like |
+|---|---|---|
+| Unit + integration suite (44 tests) | `dotnet test tests\ScreenRecall.Tests\ScreenRecall.Tests.csproj -c Release` | `Passed! - Failed: 0, Passed: 44` in 1–2 minutes; every test uses its own throwaway store under `%TEMP%` |
+| Hardware check | `dotnet run --project capture-service -c Release -- --probe` | each output and monitor listed, `duplication : ok`, 60 acquired frames |
+| Quick record + replay | `dotnet run --project capture-service -c Release -- --once 20 --root .\dev-data\demo`, then `dotnet run --project player-cli -c Release -- list .\dev-data\demo` | the capture summary table, then the day listed with log span, store size and checkpoints |
+| Same, with no display | add `--synthetic` to `--once` | identical pipeline on a software desktop |
+| Hot-path budgets | `dotnet run --project capture-service -c Release -- --bench 2000` | microseconds per tile hash/encode, milliseconds per store write, microseconds per log append |
+| Long-run check | `dotnet run --project capture-service -c Release -- --soak 30 --soak-interval 30 --root .\dev-data\soak` | per-interval samples, then a per-metric verdict (`[ ok ]` / `[ !! ]`); `--soak 1440` is the spec's 24-hour version |
+| End-to-end fidelity | see *Fidelity harness* below | pixel match 100.0000% |
+
+Two things worth knowing when reading the output:
+
+- **A live session's log lags behind on purpose.** Entries only become durable after the tiles they reference
+  are on disk, so a source that outruns the writer (`--synthetic` at full speed) can hold the log in memory for
+  seconds at a time. A reader — the player, the dashboard, another CLI — can therefore show a *running* day as
+  empty or as ending a few seconds ago. That is the documented crash window, not corruption: stop the recorder,
+  or look at a finished day.
+- **Stop a running recorder before building.** `dotnet build` has to replace
+  `capture-service\bin\...\ScreenRecall.CaptureService.exe`, and a live instance locks it
+  (`MSB3027: ... The file is locked by: ScreenRecall.CaptureService`). The test suite is no exception.
+
+Nothing you capture leaves the machine: `dev-data/`, `.dev-logs/` and `*.srdata` are gitignored.
 
 ## Fidelity harness
 

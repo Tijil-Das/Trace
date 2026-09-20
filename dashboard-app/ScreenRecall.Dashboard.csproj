@@ -7,6 +7,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>ScreenRecall.Dashboard</RootNamespace>
     <AssemblyName>ScreenRecall.Dashboard</AssemblyName>
+    <!-- WPF text rendering needs real cultures (font fallback); the repo-wide invariant
+         default in Directory.Build.props breaks it. The service/CLI keep invariant mode. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
     <NoWarn>$(NoWarn);WFAC010</NoWarn>
   </PropertyGroup>
 

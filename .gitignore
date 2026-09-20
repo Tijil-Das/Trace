@@ -8,6 +8,7 @@ artifacts/
 *.user
 *.suo
 .vs/
+*_wpftmp.csproj
 
 # Test results
 TestResults/

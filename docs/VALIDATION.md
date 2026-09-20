@@ -176,7 +176,8 @@ writer can have a full 2048-payload queue to write out when the token is cancell
 
 The 404 MB/hour figure is the expensive case on purpose: a desktop that changes continuously is what a daily
 budget has to survive, and `--soak` prints the rate instead of a single size so the budget can be set against
-it. An idle-ish desktop is closer to 60 MB/hour, which is what §3 measured.
+it. A static screen is the other extreme — DXGI reports no presents, the loop backs off and nothing is
+recorded at all (§3) — so the number to plan with is the moving desktop, not the average.
 
 ## 8. How to reproduce
 

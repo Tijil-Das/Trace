@@ -1,0 +1,24 @@
+# Local dev logs
+.dev-logs/
+
+# Build output
+bin/
+obj/
+artifacts/
+*.user
+*.suo
+.vs/
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+
+# Captured screen data / local dev stores must never be committed
+dev-data/
+*.srdata
+
+# Secrets, keys, certs
+*.pfx
+*.snk
+secrets.json

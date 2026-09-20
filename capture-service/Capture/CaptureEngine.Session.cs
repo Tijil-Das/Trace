@@ -61,6 +61,12 @@ internal sealed partial class CaptureEngine
                     return;
                 }
 
+                // The checkpoint is the strongest thing a session says: it snapshots the whole canvas rather
+                // than a delta. Draining the writer first keeps that claim true — without it, a checkpoint
+                // written seconds before a crash can reference tiles that were still queued and never reached
+                // the store, which is the same failure the flush ordering exists to prevent.
+                _assetWriter?.Drain();
+
                 string path = _session.CheckpointPathFor(timestampUs);
                 CheckpointFormat.Write(path, timestampUs, states);
                 _lastCheckpointUs = timestampUs;

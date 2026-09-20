@@ -49,7 +49,7 @@ internal sealed partial class CaptureEngine
         return canvas;
     }
 
-    /// <summary>Writes a full ground-truth frame dump (test-only mode, spec 12).</summary>
+    /// <summary>Writes a full ground-truth frame dump (test-only mode, spec 12) and keeps the folder capped.</summary>
     private void WriteGroundTruth(SourceFrame frame, long timestampUs)
     {
         string path = Path.Combine(
@@ -64,5 +64,20 @@ internal sealed partial class CaptureEngine
             frame.Width,
             frame.Height,
             frame.Pixels.AsSpan(0, frame.Pitch * frame.Height));
+
+        _stats.GroundTruthFrames++;
+
+        // Trim every so often rather than on every dump: a directory scan per frame would show up in the
+        // budget, and the caps only need to be approximately enforced. Sixteen dumps is ~64 MB of new
+        // files between scans, so the folder never drifts far past its cap.
+        if (_stats.GroundTruthFrames % 16 == 0)
+        {
+            (int deleted, long freed) = GroundTruthStore.Trim(_session.GroundTruthDir);
+            if (deleted > 0)
+            {
+                _stats.GroundTruthTrimmed += deleted;
+                _stats.LastMaintenance = $"ground-truth dumps: removed {deleted} old frame(s), freed {freed / 1024 / 1024} MB";
+            }
+        }
     }
 }

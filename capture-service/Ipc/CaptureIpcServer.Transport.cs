@@ -81,7 +81,7 @@ internal sealed partial class CaptureIpcServer
                 IpcResponse response;
                 try
                 {
-                    IpcRequest? request = JsonSerializer.Deserialize<IpcRequest>(line, RecallJson.Options);
+                    IpcRequest? request = JsonSerializer.Deserialize<IpcRequest>(line, RecallJson.WireOptions);
                     response = request is null
                         ? IpcResponse.Failure(0, "empty request")
                         : Handle(request);
@@ -94,7 +94,10 @@ internal sealed partial class CaptureIpcServer
                 RequestsHandled++;
                 try
                 {
-                    await writer.WriteLineAsync(JsonSerializer.Serialize(response, RecallJson.Options)).ConfigureAwait(false);
+                    // One line per response: the framing is line based, so the wire options must not
+                    // indent (see RecallJson.WireOptions).
+                    await writer.WriteLineAsync(JsonSerializer.Serialize(response, RecallJson.WireOptions))
+                        .ConfigureAwait(false);
                 }
                 catch (IOException ex)
                 {

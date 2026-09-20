@@ -19,9 +19,10 @@ internal sealed class AssetWriteQueue : IDisposable
     private long _written;
     private long _deduped;
     private long _bytes;
+    private long _pending;
     private bool _disposed;
 
-    internal AssetWriteQueue(AssetStore store, int capacity = 8192)
+    internal AssetWriteQueue(AssetStore store, int capacity = 2048)
     {
         _store = store;
         _queue = new BlockingCollection<WriteRequest>(Math.Max(256, capacity));
@@ -43,8 +44,8 @@ internal sealed class AssetWriteQueue : IDisposable
     /// <summary>Payload bytes written.</summary>
     internal long BytesWritten => Interlocked.Read(ref _bytes);
 
-    /// <summary>Payloads waiting to be written.</summary>
-    internal int PendingCount => _queue.Count;
+    /// <summary>Payloads handed to the writer but not yet written to disk.</summary>
+    internal long PendingCount => Interlocked.Read(ref _pending);
 
     /// <summary>Most recent write error, if any.</summary>
     internal string? LastError { get; private set; }
@@ -57,19 +58,33 @@ internal sealed class AssetWriteQueue : IDisposable
             return;
         }
 
+        Interlocked.Increment(ref _pending);
         _queue.Add(new WriteRequest(hash, codecId, width, height, payload));
     }
 
-    /// <summary>Waits until everything enqueued so far has reached the disk.</summary>
-    internal bool Drain(TimeSpan timeout)
+    /// <summary>
+    /// Blocks until every payload handed over so far is on disk. Callers that are about to flush the
+    /// reference log use this first: a log entry must never become durable before the tile it points
+    /// at, which is what keeps the store crash-consistent.
+    /// </summary>
+    internal void Drain()
+    {
+        while (Interlocked.Read(ref _pending) > 0)
+        {
+            Thread.Sleep(1);
+        }
+    }
+
+    /// <summary>Drains with a bound, for callers that must not block indefinitely (shutdown paths).</summary>
+    internal bool TryDrain(TimeSpan timeout)
     {
         DateTime deadline = DateTime.UtcNow + timeout;
-        while (_queue.Count > 0 && DateTime.UtcNow < deadline)
+        while (Interlocked.Read(ref _pending) > 0 && DateTime.UtcNow < deadline)
         {
             Thread.Sleep(2);
         }
 
-        return _queue.Count == 0;
+        return Interlocked.Read(ref _pending) == 0;
     }
 
     public void Dispose()
@@ -91,7 +106,14 @@ internal sealed class AssetWriteQueue : IDisposable
         }
 
         _cts.Dispose();
-        _queue.Dispose();
+
+        // The queue is only disposed once its consumer has actually stopped: disposing it underneath a
+        // running worker throws ObjectDisposedException on the worker thread, which would fault the
+        // process during shutdown.
+        if (!_worker.IsAlive)
+        {
+            _queue.Dispose();
+        }
     }
 
     private void ProcessLoop()
@@ -116,14 +138,18 @@ internal sealed class AssetWriteQueue : IDisposable
                 {
                     LastError = ex.Message;
                 }
+                finally
+                {
+                    Interlocked.Decrement(ref _pending);
+                }
             }
         }
         catch (OperationCanceledException)
         {
         }
-        finally
+        catch (ObjectDisposedException)
         {
-            _queue.CompleteAdding();
+            // Disposed during shutdown; nothing left to drain.
         }
     }
 

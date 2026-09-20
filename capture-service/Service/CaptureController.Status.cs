@@ -195,7 +195,7 @@ internal sealed partial class CaptureController
             Day: SessionLayout.DayName(engine.CurrentDay),
             FreeDiskGb: engine.FreeDiskGb,
             CanvasTiles: engine.CanvasTileCount,
-            SessionBytes: SessionLayout.SessionBytes(engine.StorageRoot, engine.CurrentDay),
+            SessionBytes: engine.SessionBytes(),
             AssetCountOnDisk: assetCount,
             AssetBytesOnDisk: assetBytes,
             FramesSkippedNoChange: stats.FramesSkippedNoChange,

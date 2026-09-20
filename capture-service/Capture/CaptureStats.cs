@@ -64,6 +64,18 @@ internal sealed class CaptureStats
     /// <summary>True when something outside this writer was appending to the log file.</summary>
     internal bool LogExternalWriterDetected { get; set; }
 
+    /// <summary>Ground-truth frames written since the engine started (test mode).</summary>
+    internal long GroundTruthFrames { get; set; }
+
+    /// <summary>Ground-truth frames deleted to stay inside the rolling-window caps.</summary>
+    internal long GroundTruthTrimmed { get; set; }
+
+    /// <summary>Bytes reclaimed by housekeeping (temp files, ground-truth trims, pruned days).</summary>
+    internal long BytesReclaimedByHousekeeping { get; set; }
+
+    /// <summary>True when the daily storage budget forced a fidelity reduction.</summary>
+    internal bool BudgetThrottled { get; set; }
+
     internal long FullFrameRescans { get; set; }
 
     internal long TilesHashed { get; set; }

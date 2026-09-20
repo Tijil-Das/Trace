@@ -10,4 +10,8 @@
     <ProjectReference Include="..\storage-lib\ScreenRecall.Storage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="ScreenRecall.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -6,6 +6,13 @@ namespace ScreenRecall.CaptureService.Capture;
 
 internal sealed partial class CaptureEngine
 {
+    /// <summary>
+    /// How long a shutdown or a fatal-error path will wait for queued tiles before giving up and leaving the
+    /// last interval unwritten. Sized for a writer that is behind by a full queue (2048 payloads at ~5 ms each)
+    /// without letting a stalled disk keep the service from stopping.
+    /// </summary>
+    private static readonly TimeSpan ShutdownFlushBudget = TimeSpan.FromSeconds(15);
+
     /// <summary>Runs the capture loop until the token is cancelled.</summary>
     internal void Run(CancellationToken token)
     {
@@ -92,15 +99,21 @@ internal sealed partial class CaptureEngine
             }
         }
 
-        FlushSessionState();
+        // Shutdown gets a budget: a service that cannot be stopped is worse than a lost interval, and the
+        // flush is skipped rather than half-done when it expires (see FlushSessionState).
+        FlushSessionState(ShutdownFlushBudget);
     }
 
-    /// <summary>Records a fatal error from outside the loop (used by the host when the task faults).</summary>
+    /// <summary>
+    /// Records a fatal error from outside the loop (used by the host when the task faults). Bounded like
+    /// shutdown: the process is going away either way, and the interval stays atomic if the writer cannot
+    /// finish in time.
+    /// </summary>
     internal void ReportFatal(Exception exception)
     {
         _stats.LastError = $"capture loop stopped: {exception}";
         _stats.FatalException = exception;
-        FlushSessionState();
+        FlushSessionState(ShutdownFlushBudget);
     }
 
     /// <summary>Rebuilds the backend after a lost duplication session or a display topology change.</summary>

@@ -198,7 +198,7 @@ internal sealed partial class CaptureEngine
         _stats.LastStoreMs = Math.Round(storeMs, 2);
         _stats.LastLogMs = Math.Round(logMs, 2);
         _stats.AssetsBytesWritten = _assetWriter.BytesWritten;
-        _stats.AssetQueueDepth = _assetWriter.PendingCount;
+        _stats.AssetQueueDepth = (int)_assetWriter.PendingCount;
         return changes;
     }
 }

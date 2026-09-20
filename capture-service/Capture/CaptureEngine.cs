@@ -24,6 +24,7 @@ internal sealed partial class CaptureEngine : IDisposable
     private readonly Dictionary<ushort, ulong[]> _canvas = new();
     private readonly byte[] _tileScratch;
     private readonly IFrameSource _source;
+    private readonly StoreLock? _storeLock;
 
     private ExclusionMatcher _exclusions;
     private ForegroundWindowTracker _foreground;
@@ -46,6 +47,10 @@ internal sealed partial class CaptureEngine : IDisposable
     private long _lastGroundTruthMs;
     private bool _owedRescan;
     private long _lastAssetStatsMs;
+    private int _assetStatsRefreshing;
+    private long _lastSessionBytesMs;
+    private long _cachedSessionBytes;
+    private int _sessionBytesRefreshing;
     private long _cachedAssetCount;
     private long _cachedAssetBytes;
     private bool _forceFullRescan = true;
@@ -67,8 +72,23 @@ internal sealed partial class CaptureEngine : IDisposable
         _tileScratch = new byte[Math.Max(_config.TileSize * _config.TileSize * 4, 64 * 64 * 4)];
         _day = DateOnly.FromDateTime(DateTimeOffset.Now.LocalDateTime);
 
+        if (!StoreLock.TryAcquire(config.StoragePath, out StoreLock? storeLock, out string? holder))
+        {
+            // Two writers in one store would interleave log appends: refuse to record rather than
+            // corrupt what is already there.
+            _stats.LastError = $"another Screen Recall instance is recording into '{config.StoragePath}' ({holder})";
+            storeLock?.Dispose();
+            _paused = true;
+            _stats.Paused = true;
+        }
+        else
+        {
+            _storeLock = storeLock;
+        }
+
         (_session, _log, _manifest, _index) = SessionOpener.Open(_config, _day, _source.Monitors);
         _assetWriter = new AssetWriteQueue(_session.Assets);
+        PrepareSessionStorage();
         SeedCanvasFromLatestCheckpoint();
     }
 
@@ -113,18 +133,117 @@ internal sealed partial class CaptureEngine : IDisposable
 
     /// <summary>
     /// Asset count and byte footprint of the store, refreshed at most every 30 seconds. Walking a
-    /// store with hundreds of thousands of files is far too expensive to do per status poll.
+    /// store with hundreds of thousands of files is far too expensive to do per status poll, and far
+    /// too expensive to do on the thread answering the poll: after the first call the walk is handed to
+    /// the thread pool and this returns the last known figures immediately.
     /// </summary>
-    internal (long Count, long Bytes) AssetStats()
+    internal (long Count, long Bytes) AssetStats(int refreshIntervalMs = 30_000)
     {
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        if (nowMs - _lastAssetStatsMs >= 30_000 || _lastAssetStatsMs == 0)
+        if (_lastAssetStatsMs == 0)
         {
-            _lastAssetStatsMs = nowMs;
-            (_cachedAssetCount, _cachedAssetBytes) = _session.Assets.ComputeStats();
+            // First call has nothing cached to return, and at startup the store is small: answer
+            // synchronously so the CLI and the first dashboard poll get real numbers.
+            RefreshAssetStats(nowMs);
+        }
+        else if (nowMs - _lastAssetStatsMs >= refreshIntervalMs)
+        {
+            QueueAssetStatsRefresh(nowMs);
         }
 
         return (_cachedAssetCount, _cachedAssetBytes);
+    }
+
+    /// <summary>Recomputes the store footprint into the cached fields.</summary>
+    private void RefreshAssetStats(long nowMs)
+    {
+        try
+        {
+            (_cachedAssetCount, _cachedAssetBytes) = _session.Assets.ComputeStats();
+            _lastAssetStatsMs = nowMs;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _stats.LastError = $"asset stats failed: {ex.Message}";
+            _lastAssetStatsMs = nowMs; // Back off; a broken walk must not be retried on every poll.
+        }
+    }
+
+    /// <summary>
+    /// Starts a background recount if one is not already running. Single-flight: the dashboard polls
+    /// every couple of seconds, and without the guard a slow walk would be started again on every tick.
+    /// </summary>
+    private void QueueAssetStatsRefresh(long nowMs)
+    {
+        if (Interlocked.CompareExchange(ref _assetStatsRefreshing, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _lastAssetStatsMs = nowMs;
+        Task.Run(() =>
+        {
+            try
+            {
+                (_cachedAssetCount, _cachedAssetBytes) = _session.Assets.ComputeStats();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _stats.LastError = $"asset stats failed: {ex.Message}";
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _assetStatsRefreshing, 0);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Bytes occupied by today's session folder. The folder holds the log, the checkpoints and any
+    /// ground-truth dumps, so walking it on every status poll — twice a second, from the tray and the
+    /// window — would cost thousands of file-system calls a second to track a number that moves by a few
+    /// kilobytes. Cached for 30 seconds, refreshed off-thread after the first call.
+    /// </summary>
+    internal long SessionBytes(int refreshIntervalMs = 30_000)
+    {
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (_lastSessionBytesMs == 0)
+        {
+            _cachedSessionBytes = SessionLayout.SessionBytes(_session.Root, _day);
+            _lastSessionBytesMs = nowMs;
+        }
+        else if (nowMs - _lastSessionBytesMs >= refreshIntervalMs)
+        {
+            QueueSessionBytesRefresh(nowMs);
+        }
+
+        return _cachedSessionBytes;
+    }
+
+    /// <summary>Starts a background size recount if one is not already running.</summary>
+    private void QueueSessionBytesRefresh(long nowMs)
+    {
+        if (Interlocked.CompareExchange(ref _sessionBytesRefreshing, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _lastSessionBytesMs = nowMs;
+        Task.Run(() =>
+        {
+            try
+            {
+                _cachedSessionBytes = SessionLayout.SessionBytes(_session.Root, _day);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _stats.LastError = $"session size failed: {ex.Message}";
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _sessionBytesRefreshing, 0);
+            }
+        });
     }
 
     /// <summary>True when capture is paused by the user.</summary>
@@ -159,11 +278,12 @@ internal sealed partial class CaptureEngine : IDisposable
             _disposed = true;
             try
             {
-                _assetWriter.Drain(TimeSpan.FromSeconds(10));
+                _assetWriter.TryDrain(TimeSpan.FromSeconds(20));
                 _assetWriter.Dispose();
                 _log?.Dispose();
                 _manifest?.Dispose();
                 _index?.Dispose();
+                _storeLock?.Dispose();
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException)
             {

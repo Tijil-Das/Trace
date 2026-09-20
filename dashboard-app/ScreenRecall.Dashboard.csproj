@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <RootNamespace>ScreenRecall.Dashboard</RootNamespace>
+    <AssemblyName>ScreenRecall.Dashboard</AssemblyName>
+    <NoWarn>$(NoWarn);WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\player-lib\ScreenRecall.Player.csproj" />
+    <ProjectReference Include="..\storage-lib\ScreenRecall.Storage.csproj" />
+  </ItemGroup>
+
+</Project>

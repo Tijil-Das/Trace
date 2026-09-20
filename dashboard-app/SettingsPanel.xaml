@@ -1,0 +1,63 @@
+<UserControl x:Class="ScreenRecall.Dashboard.SettingsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Border Background="{StaticResource PanelBrush}" Padding="10" CornerRadius="6">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+      <StackPanel>
+        <TextBlock Text="Capture service" FontSize="14" FontWeight="SemiBold" />
+        <TextBlock x:Name="ServiceStateText" Text="checking…" Margin="0,6,0,0" TextWrapping="Wrap" />
+        <TextBlock x:Name="ResourceText" Text="" FontFamily="Consolas" Margin="0,4,0,0" TextWrapping="Wrap" />
+        <TextBlock x:Name="IntegrityText" Text="" Foreground="{StaticResource WarnBrush}"
+                   TextWrapping="Wrap" Margin="0,4,0,0" />
+        <TextBlock x:Name="ErrorText" Text="" Foreground="{StaticResource WarnBrush}"
+                   TextWrapping="Wrap" Margin="0,4,0,0" />
+
+        <WrapPanel Margin="0,8,0,0">
+          <Button x:Name="PauseButton" Content="Pause recording" Click="OnTogglePause" />
+          <Button Content="Purge 15 min" Click="OnPurge" />
+          <Button Content="Prune now" Click="OnPrune" />
+          <Button Content="Probe monitors" Click="OnProbe" />
+        </WrapPanel>
+
+        <Separator Margin="0,10,0,10" />
+        <TextBlock Text="Settings" FontSize="14" FontWeight="SemiBold" />
+
+        <TextBlock Text="Storage folder" Margin="0,8,0,2" />
+        <TextBox x:Name="StoragePathBox" />
+
+        <TextBlock Text="Retention (days)" Margin="0,4,0,2" />
+        <TextBox x:Name="RetentionBox" />
+
+        <TextBlock Text="Checkpoint interval (seconds)" Margin="0,4,0,2" />
+        <TextBox x:Name="CheckpointBox" />
+
+        <TextBlock Text="Fidelity mode" Margin="0,4,0,2" />
+        <ComboBox x:Name="FidelityBox" SelectedIndex="0" Margin="0,0,0,6">
+          <ComboBoxItem Content="lossless" />
+          <ComboBoxItem Content="balanced" />
+        </ComboBox>
+
+        <CheckBox x:Name="CaptureAllMonitorsBox" Content="Capture all monitors" Margin="0,4,0,0" />
+
+        <TextBlock Text="Excluded processes (one per line)" Margin="0,4,0,2" />
+        <TextBox x:Name="ExclusionsBox" AcceptsReturn="True" Height="64" VerticalScrollBarVisibility="Auto" />
+
+        <TextBlock Text="Excluded title patterns (one per line)" Margin="0,4,0,2" />
+        <TextBox x:Name="TitleExclusionsBox" AcceptsReturn="True" Height="64" VerticalScrollBarVisibility="Auto" />
+
+        <CheckBox x:Name="EncryptionBox" Content="Encrypt at rest (planned — see docs/ROADMAP.md)" IsEnabled="False" />
+
+        <WrapPanel>
+          <Button Content="Save settings" Click="OnSaveSettings" />
+          <Button Content="Reload from service" Click="OnReloadSettings" />
+        </WrapPanel>
+
+        <TextBlock x:Name="SettingsStatusText" Text="" Foreground="#FF9AA6BB"
+                   TextWrapping="Wrap" Margin="0,6,0,0" />
+        <Separator Margin="0,10,0,10" />
+        <TextBlock Text="Closing this window keeps it in the notification area; recording is unaffected."
+                   Foreground="#FF9AA6BB" TextWrapping="Wrap" />
+      </StackPanel>
+    </ScrollViewer>
+  </Border>
+</UserControl>

@@ -34,6 +34,7 @@ public sealed partial class RecallIndex : IDisposable
         Execute("PRAGMA journal_mode=WAL;");
         Execute("PRAGMA synchronous=NORMAL;");
         Execute("PRAGMA busy_timeout=5000;");
+        EnsureIncrementalAutoVacuum();
         CreateSchema();
         DbPath = dbPath;
     }
@@ -123,6 +124,36 @@ public sealed partial class RecallIndex : IDisposable
 
         _disposed = true;
         _connection.Dispose();
+    }
+
+    /// <summary>
+    /// Makes SQLite hand pages freed by DELETEs back to the file system. Without it the index only ever
+    /// grows: retention pruning and panic purges delete rows, but the file keeps their pages, so a store
+    /// recording for months carries every row it has ever deleted.
+    /// </summary>
+    private void EnsureIncrementalAutoVacuum()
+    {
+        if (ScalarLong("PRAGMA auto_vacuum;") == 2)
+        {
+            return;
+        }
+
+        // The pragma on its own is silently ignored for any database that already has a header — which
+        // includes a brand-new file once a journal mode has been set on it — so the file is rebuilt with
+        // VACUUM immediately after. This layer stores boundaries rather than pixel data, so the rebuild is
+        // cheap. Both statements were verified against SQLite directly: auto_vacuum then reads 2
+        // (incremental) from a live and from a fresh connection, and pages freed by later deletes are
+        // returned to the file system by PRAGMA incremental_vacuum.
+        Execute("PRAGMA auto_vacuum=INCREMENTAL;");
+        Execute("VACUUM;");
+    }
+
+    private long ScalarLong(string sql)
+    {
+        using SqliteCommand command = _connection.CreateCommand();
+        command.CommandText = sql;
+        object? value = command.ExecuteScalar();
+        return value is null or DBNull ? 0 : Convert.ToInt64(value);
     }
 
     private void Execute(string sql)

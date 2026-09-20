@@ -23,15 +23,40 @@ public sealed partial class AssetStore
         }
     }
 
-    /// <summary>Asset count and byte footprint on disk.</summary>
+    /// <summary>
+    /// Asset count and byte footprint on disk. Sizes come from the directory listing itself, which saves
+    /// a second system call per file — safe here because assets are immutable once written (a tile is
+    /// created by renaming a finished temp file into place, never appended to afterwards), so the
+    /// listing's size field is always current for them.
+    /// </summary>
     public (long Count, long Bytes) ComputeStats()
     {
+        if (!Directory.Exists(Root))
+        {
+            return (0, 0);
+        }
+
         long count = 0;
         long bytes = 0;
-        foreach ((_, _, long size) in EnumerateFiles())
+        try
         {
-            count++;
-            bytes += size;
+            foreach (FileInfo file in new DirectoryInfo(Root).EnumerateFiles("*.tile", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    bytes += file.Length;
+                    count++;
+                }
+                catch (IOException)
+                {
+                    // Deleted between listing and measuring (retention GC): skip it.
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A shard can disappear underneath the walk (retention GC). Report what was counted: this
+            // feeds a status display, and the next pass picks up the true totals.
         }
 
         return (count, bytes);
@@ -80,23 +105,29 @@ public sealed partial class AssetStore
     }
 
     /// <summary>Removes temp files left behind by an interrupted write.</summary>
-    public int CleanupTempFiles(TimeSpan olderThan)
+    public int CleanupTempFiles(TimeSpan olderThan) => CleanupTempFilesDetailed(olderThan).Deleted;
+
+    /// <summary>Removes temp files left behind by an interrupted write, reporting the bytes reclaimed.</summary>
+    public (int Deleted, long Bytes) CleanupTempFilesDetailed(TimeSpan olderThan)
     {
         int removed = 0;
+        long bytes = 0;
         if (!Directory.Exists(_tempDir))
         {
-            return 0;
+            return (0, 0);
         }
 
         DateTime cutoff = DateTime.UtcNow - olderThan;
-        foreach (string file in Directory.EnumerateFiles(_tempDir, "*.part"))
+        foreach (FileInfo file in new DirectoryInfo(_tempDir).EnumerateFiles("*.part"))
         {
             try
             {
-                if (File.GetLastWriteTimeUtc(file) < cutoff)
+                if (file.LastWriteTimeUtc < cutoff)
                 {
-                    File.Delete(file);
+                    long size = file.Length;
+                    file.Delete();
                     removed++;
+                    bytes += size;
                 }
             }
             catch (IOException)
@@ -105,6 +136,6 @@ public sealed partial class AssetStore
             }
         }
 
-        return removed;
+        return (removed, bytes);
     }
 }

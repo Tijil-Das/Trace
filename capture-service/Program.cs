@@ -49,6 +49,11 @@ internal static class Program
             return OnceCommand.Run(config, commandLine);
         }
 
+        if (commandLine.SoakMinutes > 0)
+        {
+            return SoakCommand.Run(config, commandLine);
+        }
+
         return RunHost(args, config, commandLine);
     }
 

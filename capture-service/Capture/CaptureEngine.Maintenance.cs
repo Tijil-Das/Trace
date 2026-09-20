@@ -44,6 +44,24 @@ internal sealed partial class CaptureEngine
         }
 
         long nowMs = nowUs / 1000;
+
+        // Keep the cached size numbers warm from the loop rather than from whoever happens to poll: a
+        // consumer that only asks once a minute would otherwise always read the answer measured a minute
+        // ago, which reads as a frozen counter. Both calls are self-throttling, and their walks run
+        // off-thread, so this costs two timestamp comparisons per iteration.
+        _ = AssetStats();
+        _ = SessionBytes();
+
+        try
+        {
+            RunHousekeeping(nowMs);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException
+                                      or Microsoft.Data.Sqlite.SqliteException)
+        {
+            _stats.LastError = $"housekeeping failed: {ex.Message}";
+        }
+
         if (_lastPruneMs == 0)
         {
             _lastPruneMs = nowMs;

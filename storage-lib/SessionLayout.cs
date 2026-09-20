@@ -90,7 +90,17 @@ public static class SessionLayout
         return days;
     }
 
-    /// <summary>Bytes occupied by one day's session folder.</summary>
+    /// <summary>
+    /// Bytes occupied by one day's session folder.
+    /// </summary>
+    /// <remarks>
+    /// Sizes are read per file rather than taken from the directory listing. That costs one extra system
+    /// call per file, but the listing's size field is only refreshed when a file is closed — so a log
+    /// that is being appended to right now reports the size it had when it was created. The session
+    /// folder is dominated by exactly such a file, and the whole point of this number is to show a
+    /// session growing; a stale size is worse than no size at all. The folder holds tens to hundreds of
+    /// files, and callers cache the result, so the cost is bounded.
+    /// </remarks>
     public static long SessionBytes(string root, DateOnly day)
     {
         string dir = SessionDir(root, day);
@@ -100,15 +110,24 @@ public static class SessionLayout
         }
 
         long total = 0;
-        foreach (string file in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
+        try
         {
-            try
+            foreach (string path in Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories))
             {
-                total += new FileInfo(file).Length;
+                try
+                {
+                    total += new FileInfo(path).Length;
+                }
+                catch (IOException)
+                {
+                    // Deleted between listing and measuring (retention GC): skip it, keep the total.
+                }
             }
-            catch (IOException)
-            {
-            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Enumeration itself can fail part-way (a folder removed mid-walk). What was already
+            // counted is still a better answer than zero, and the next pass corrects it.
         }
 
         return total;

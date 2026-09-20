@@ -32,7 +32,8 @@ internal sealed class CaptureWorker : BackgroundService
     private CaptureIpcServer? _server;
     private IFrameSource? _source;
 
-    internal CaptureWorker(ILogger<CaptureWorker> logger, RecallConfig config, Cli.CommandLine commandLine)
+    /// <summary>Public because the generic host's container constructs hosted services.</summary>
+    public CaptureWorker(ILogger<CaptureWorker> logger, RecallConfig config, Cli.CommandLine commandLine)
     {
         _logger = logger;
         _config = config;
@@ -46,9 +47,9 @@ internal sealed class CaptureWorker : BackgroundService
         if (commandLine.Synthetic)
         {
             return new SyntheticFrameSource(
-                width: 1024,
-                height: 768,
-                frameIntervalMs: Math.Max(4, config.BurstPollMs > 0 ? config.BurstPollMs : 16),
+                width: SyntheticWidth(commandLine),
+                height: SyntheticHeight(commandLine),
+                frameIntervalMs: commandLine.SyntheticIntervalMs,
                 tileSize: config.TileSize);
         }
 
@@ -60,10 +61,28 @@ internal sealed class CaptureWorker : BackgroundService
         {
             note = $"DXGI duplication unavailable ({string.Join("; ", dxgi.Notes)}); falling back to the synthetic source";
             dxgi.Dispose();
-            return new SyntheticFrameSource(1024, 768, 16, config.TileSize);
+            return new SyntheticFrameSource(1024, 768, commandLine.SyntheticIntervalMs, config.TileSize);
         }
 
         return dxgi;
+    }
+
+    private static int SyntheticWidth(Cli.CommandLine commandLine) => ParseSize(commandLine).Width;
+
+    private static int SyntheticHeight(Cli.CommandLine commandLine) => ParseSize(commandLine).Height;
+
+    private static (int Width, int Height) ParseSize(Cli.CommandLine commandLine)
+    {
+        if (commandLine.SyntheticSize is { Length: > 0 } size)
+        {
+            string[] parts = size.Split('x', 'X');
+            if (parts.Length == 2 && int.TryParse(parts[0], out int width) && int.TryParse(parts[1], out int height))
+            {
+                return (Math.Clamp(width, 64, 16384), Math.Clamp(height, 64, 16384));
+            }
+        }
+
+        return (1024, 768);
     }
 
     protected override Task ExecuteAsync(CancellationToken stoppingToken)

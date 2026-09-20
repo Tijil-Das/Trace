@@ -70,6 +70,9 @@ public sealed class SessionMeta
         File.Move(temp, path, overwrite: true);
     }
 
+    /// <summary>Maximum distinct monitor geometries kept per session (older ones are dropped).</summary>
+    public const int MaxMonitorEntries = 64;
+
     /// <summary>Merges the currently observed monitors, preserving first-seen times.</summary>
     public void Update(IReadOnlyList<MonitorInfo> monitors, long nowUnixMs)
     {
@@ -93,6 +96,16 @@ public sealed class SessionMeta
                 monitor.TileSize,
                 nowUnixMs,
                 nowUnixMs));
+        }
+
+        // A monitor that flickers between modes would otherwise grow this file forever.
+        if (Monitors.Count > MaxMonitorEntries)
+        {
+            Monitors = Monitors
+                .OrderByDescending(monitor => monitor.LastSeenUnixMs)
+                .Take(MaxMonitorEntries)
+                .OrderBy(monitor => monitor.FirstSeenUnixMs)
+                .ToList();
         }
     }
 

@@ -100,11 +100,34 @@ internal sealed partial class CaptureEngine
     /// Flushes the log and manifest so readers see everything written so far. The asset writer is
     /// drained first: a checkpoint or a purge must never run while tile payloads are still queued.
     /// </summary>
-    internal void FlushSessionState()
+    /// <param name="drainBudget">
+    /// Optional cap on how long to wait for the writer. Routine flushes pass nothing: the loop is alive and
+    /// the writer's queue is bounded, so waiting is the backpressure that keeps the store consistent. Shutdown
+    /// passes a budget, because a service that cannot be stopped is worse than a lost interval â€” and when the
+    /// budget expires the log is deliberately *not* flushed, so the entries and tiles of that interval stay
+    /// atomic instead of leaving entries pointing at tiles that never reached disk.
+    /// </param>
+    internal void FlushSessionState(TimeSpan? drainBudget = null)
     {
         try
         {
-            _assetWriter?.Drain(TimeSpan.FromSeconds(5));
+            // Assets first, then the log. A log entry must never become durable before the tile it
+            // points at, or a reader (and a crash) can see a reference to an asset that does not
+            // exist yet. With this ordering the store is crash-consistent at every flush boundary: if
+            // the process dies mid-interval, neither the entries nor the assets of that interval made
+            // it to disk.
+            bool drained = drainBudget is { } budget
+                ? _assetWriter is null || _assetWriter.TryDrain(budget)
+                : DrainWriterUnbounded();
+
+            if (!drained)
+            {
+                _stats.LastError =
+                    $"flush skipped after waiting {drainBudget!.Value.TotalSeconds:0}s for the asset writer: "
+                    + $"{_assetWriter?.PendingCount ?? 0} payload(s) still queued";
+                return;
+            }
+
             _log?.Flush();
             _manifest?.Flush();
 
@@ -125,5 +148,16 @@ internal sealed partial class CaptureEngine
         {
             _stats.LastError = ex.Message;
         }
+    }
+
+    /// <summary>
+    /// Waits for every queued tile to reach disk, with no deadline. Only used while the loop is running, where
+    /// waiting is the intended backpressure: the queue is bounded, so a slow writer slows capture instead of
+    /// dropping payloads.
+    /// </summary>
+    private bool DrainWriterUnbounded()
+    {
+        _assetWriter?.Drain();
+        return true;
     }
 }

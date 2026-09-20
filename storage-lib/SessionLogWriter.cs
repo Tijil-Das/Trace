@@ -12,6 +12,7 @@ public sealed class SessionLogWriter : IDisposable
     private readonly FileStream _stream;
     private readonly byte[] _entries;
     private readonly object _gate = new();
+    private readonly long _initialLength;
     private int _buffered;
     private bool _disposed;
 
@@ -21,6 +22,7 @@ public sealed class SessionLogWriter : IDisposable
         bool exists = File.Exists(path);
         _stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete, 1 << 16);
         _entries = new byte[entryBuffer * LogEntry.Size];
+        _initialLength = _stream.Length;
 
         if (!exists || _stream.Length < SessionLogFormat.HeaderSize)
         {
@@ -31,10 +33,7 @@ public sealed class SessionLogWriter : IDisposable
         }
 
         FilePath = path;
-        _initialLength = _stream.Length;
     }
-
-    private readonly long _initialLength;
 
     /// <summary>Path of this log segment.</summary>
     public string FilePath { get; }
@@ -182,12 +181,25 @@ public sealed class SessionLogWriter : IDisposable
 
     private void VerifyFileLength()
     {
-        // Length at open + whatever this writer added: anything else means a second handle (or another
-        // process) is appending to the same log, which no amount of internal locking can protect.
+        // Length at open + whatever this writer added. The size is read from the file system rather
+        // than from the stream handle: a second handle appending to the same log would not be visible
+        // in this handle's cached length. Anything unexpected here means another writer is in the file,
+        // which no amount of internal locking can protect against.
+        long actual;
+        try
+        {
+            actual = new FileInfo(FilePath).Length;
+        }
+        catch (IOException)
+        {
+            return;
+        }
+
         long expected = _initialLength + HeaderBytesWritten + EntryBytesWritten;
-        if (_stream.Length != expected)
+        if (actual != expected)
         {
             ExternalWriterDetected = true;
         }
     }
+
 }

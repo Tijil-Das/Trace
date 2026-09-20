@@ -120,12 +120,30 @@ public static class AssetManifest
 /// </summary>
 public sealed class AssetManifestWriter : IDisposable
 {
+    /// <summary>
+    /// Upper bound on the in-memory "already written" set. A heavy day can touch millions of distinct
+    /// tiles, and holding every hash in a set for twenty-four hours is memory that grows all day for a
+    /// benefit (skipping duplicate writes) that the format does not actually require — the file is
+    /// explicitly allowed to contain duplicates and readers de-duplicate. Past this bound the writer
+    /// simply appends every hash.
+    /// </summary>
+    private const int MaxTrackedHashes = 1_000_000;
+
     private readonly HashSet<ulong> _seen = new();
     private readonly FileStream _stream;
+    private readonly int _trackedHashLimit;
+    private bool _trackingDisabled;
     private bool _disposed;
 
     public AssetManifestWriter(string path, bool append)
+        : this(path, append, MaxTrackedHashes)
     {
+    }
+
+    /// <summary>Test seam: a small limit makes the "stop tracking to bound memory" path reachable.</summary>
+    internal AssetManifestWriter(string path, bool append, int trackedHashLimit)
+    {
+        _trackedHashLimit = Math.Max(2, trackedHashLimit);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         _stream = new FileStream(path, append && File.Exists(path) ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.Read, 1 << 16);
         if (_stream.Length == 0)
@@ -134,24 +152,47 @@ public sealed class AssetManifestWriter : IDisposable
         }
     }
 
-    /// <summary>Hashes already recorded for this session.</summary>
+    /// <summary>Hashes currently tracked as already recorded (0 once the tracking cap disabled the set).</summary>
     public int DistinctHashes => _seen.Count;
+
+    /// <summary>True when the writer hit its tracking limit and stopped de-duplicating in memory.</summary>
+    public bool TrackingCapped => _trackingDisabled;
+
+    /// <summary>Hash records appended to the manifest file.</summary>
+    public long HashesAppended { get; private set; }
 
     /// <summary>Bytes appended to the manifest file.</summary>
     public long BytesWritten { get; private set; }
 
-    /// <summary>Records a hash; duplicate hashes are dropped in memory before touching the file.</summary>
+    /// <summary>Records a hash; duplicate hashes are dropped in memory while the tracking set lasts.</summary>
     public bool Add(ulong hash)
     {
-        if (hash == TileHash.None || !_seen.Add(hash))
+        if (hash == TileHash.None)
         {
             return false;
+        }
+
+        if (!_trackingDisabled)
+        {
+            if (!_seen.Add(hash))
+            {
+                return false;
+            }
+
+            if (_seen.Count >= _trackedHashLimit)
+            {
+                // Release the set rather than grow it for the rest of the day; readers collapse the
+                // duplicates that follow, and the file stays a valid manifest either way.
+                _seen.Clear();
+                _trackingDisabled = true;
+            }
         }
 
         Span<byte> buffer = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64LittleEndian(buffer, hash);
         _stream.Write(buffer);
         BytesWritten += 8;
+        HashesAppended++;
         return true;
     }
 

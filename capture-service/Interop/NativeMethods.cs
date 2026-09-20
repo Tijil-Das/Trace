@@ -26,6 +26,15 @@ internal static partial class NativeMethods
     [LibraryImport("kernel32.dll", EntryPoint = "GetCurrentProcess")]
     internal static partial IntPtr GetCurrentProcess();
 
+    /// <summary>
+    /// Kernel handle count for a process. Used instead of <see cref="System.Diagnostics.Process.HandleCount"/>
+    /// because that property was measured reporting thousands of handles for a process holding a few hundred:
+    /// a measurement tool has to measure with the system call directly.
+    /// </summary>
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    internal static partial bool GetProcessHandleCount(IntPtr process, out int handleCount);
+
     [LibraryImport("kernel32.dll", EntryPoint = "GetCurrentThread")]
     internal static partial IntPtr GetCurrentThread();
 

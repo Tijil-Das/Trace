@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="description" content="Screen Recall dashboard: review recorded screen history, configure the capture service." />
+    <title>Screen Recall</title>
+    <style>
+      /* Pre-paint background so a WebView2 host never flashes white before the bundle runs. */
+      html,
+      body {
+        margin: 0;
+        background: #0b0f14;
+        color: #e6edf3;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

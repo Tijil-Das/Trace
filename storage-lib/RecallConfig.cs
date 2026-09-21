@@ -82,7 +82,9 @@ public sealed partial class RecallConfig
             StoragePath = DefaultStoragePath();
         }
 
-        FidelityMode = TileCodecs.FromFidelityMode(FidelityMode) == TileCodecs.Balanced ? "balanced" : "lossless";
+        FidelityMode = TileCodecs.FromFidelityMode(FidelityMode) == TileCodecs.Balanced ? "balanced"
+            : TileCodecs.FromFidelityMode(FidelityMode) == TileCodecs.Archive ? "archive"
+            : "lossless";
         ExcludedProcesses ??= new List<string>();
         ExcludedTitlePatterns ??= new List<string>();
         MonitorIds ??= new List<ushort>();

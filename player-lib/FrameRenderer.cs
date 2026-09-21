@@ -91,6 +91,77 @@ public sealed class FrameRenderer
         return new RenderedFrame(0, left, top, width, height, composite);
     }
 
+    /// <summary>
+    /// Renders every monitor into a caller-owned buffer, filling the same virtual-desktop rect that
+    /// <see cref="RenderVirtualDesktop(ScreenCanvas)"/> would produce.
+    /// </summary>
+    /// <remarks>
+    /// Playback calls this sixty times a second, and the allocating overload costs one monitor buffer plus a
+    /// composite per call — megabytes of garbage per second, which is exactly the kind of garbage that turns
+    /// into a GC pause in the middle of a scroll and reads to the user as lag. This one blits straight into
+    /// the caller's buffer at the final offset: no intermediate composite, no per-monitor copy. Only the
+    /// region about to be written is cleared, so a reused buffer never shows stale pixels from the frame
+    /// before. Nothing here changes what is decoded — pixels still come from the same lossless tiles.
+    ///
+    /// The returned frame's <see cref="RenderedFrame.Bgra"/> is the whole buffer and may be longer than
+    /// Width * Height * 4; consumers must use Width/Height/Stride and never Bgra.Length.
+    /// </remarks>
+    public RenderedFrame RenderVirtualDesktopInto(ScreenCanvas canvas, byte[] destination)
+    {
+        List<MonitorInfo> monitors = canvas.Monitors.ToList();
+        if (monitors.Count == 0)
+        {
+            return new RenderedFrame(0, 0, 0, 1, 1, destination);
+        }
+
+        int left = monitors.Min(monitor => monitor.X);
+        int top = monitors.Min(monitor => monitor.Y);
+        int width = Math.Max(1, monitors.Max(monitor => monitor.X + monitor.Width) - left);
+        int height = Math.Max(1, monitors.Max(monitor => monitor.Y + monitor.Height) - top);
+        int needed = width * height * 4;
+        if (destination.Length < needed)
+        {
+            throw new ArgumentException(
+                $"Destination must hold at least {needed} bytes for a {width}x{height} frame.", nameof(destination));
+        }
+
+        Array.Clear(destination, 0, needed);
+
+        foreach (MonitorInfo monitor in monitors)
+        {
+            RenderInto(canvas, monitor, destination, width * 4, monitor.X - left, monitor.Y - top);
+        }
+
+        return new RenderedFrame(0, left, top, width, height, destination);
+    }
+
+    /// <summary>Blits one monitor's canvas state into a larger buffer at a pixel offset.</summary>
+    private void RenderInto(ScreenCanvas canvas, MonitorInfo monitor, byte[] destination, int destinationStride, int offsetX, int offsetY)
+    {
+        Parallel.For(0, monitor.Rows, row =>
+        {
+            int cellY = monitor.OriginCellY + row;
+            for (int column = 0; column < monitor.Columns; column++)
+            {
+                int cellX = monitor.OriginCellX + column;
+                ulong hash = canvas.TileAt(monitor.Id, cellX, cellY);
+                if (hash == TileHash.None)
+                {
+                    continue;
+                }
+
+                TileBitmap? tile = _cache.Get(hash);
+                if (tile is null)
+                {
+                    continue; // missing asset: leave a hole rather than failing the whole frame
+                }
+
+                monitor.TilePixelRect(cellX, cellY, out int x, out int y, out int width, out int height);
+                Blit(tile, destination, destinationStride, x + offsetX, y + offsetY, width, height);
+            }
+        });
+    }
+
     /// <summary>Copies the intersecting part of a tile into the frame buffer.</summary>
     private static void Blit(TileBitmap tile, byte[] destination, int destinationStride, int x, int y, int width, int height)
     {

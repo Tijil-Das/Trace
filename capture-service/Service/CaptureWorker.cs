@@ -27,17 +27,23 @@ internal sealed class CaptureWorker : BackgroundService
     private readonly ILogger<CaptureWorker> _logger;
     private readonly RecallConfig _config;
     private readonly Cli.CommandLine _commandLine;
+    private readonly IHostApplicationLifetime _lifetime;
 
     private CaptureController? _controller;
     private CaptureIpcServer? _server;
     private IFrameSource? _source;
 
     /// <summary>Public because the generic host's container constructs hosted services.</summary>
-    public CaptureWorker(ILogger<CaptureWorker> logger, RecallConfig config, Cli.CommandLine commandLine)
+    public CaptureWorker(
+        ILogger<CaptureWorker> logger,
+        RecallConfig config,
+        Cli.CommandLine commandLine,
+        IHostApplicationLifetime lifetime)
     {
         _logger = logger;
         _config = config;
         _commandLine = commandLine;
+        _lifetime = lifetime;
     }
 
     /// <summary>Builds the capture backend, honouring the synthetic-source switch.</summary>
@@ -132,6 +138,17 @@ internal sealed class CaptureWorker : BackgroundService
             {
                 break;
             }
+        }
+
+        // A hosted service returning does not stop the host, and nothing else here stops it either: without this
+        // an IPC "shutdown" made the recorder stop recording and then stay alive as an idle process. That is
+        // worse than not stopping at all, because the dashboard's Stop button looks like it failed while the
+        // recorder quietly holds the store open. Asking the application to stop runs StopAsync, which disposes the
+        // IPC server and lets the controller drain and flush before the process exits.
+        if (_controller is { ShutdownRequested: true } && !stoppingToken.IsCancellationRequested)
+        {
+            _logger.LogInformation("shutdown requested over IPC: stopping");
+            _lifetime.StopApplication();
         }
     }
 }

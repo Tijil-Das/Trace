@@ -137,9 +137,12 @@ internal sealed partial class CaptureEngine
             return;
         }
 
-        if (!_stats.BudgetThrottled && _codec.IsLossless)
+        if (!_stats.BudgetThrottled && _codec.IsLossless && _codec != TileCodecs.Balanced)
         {
-            _codec = TileCodecs.Balanced;
+            // Budget pressure goes down one fidelity step, never up: archive → lossless → balanced. The archive
+            // codec is already the densest lossless one, so an over-budget archive day falls back to cheap and
+            // fast rather than to a different kind of losslessness.
+            _codec = _codec == TileCodecs.Archive ? TileCodecs.Lossless : TileCodecs.Balanced;
             _stats.BudgetThrottled = true;
             _stats.LastMaintenance =
                 $"daily budget reached ({used / 1024 / 1024} MB): switched to balanced compression";

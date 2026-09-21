@@ -51,6 +51,12 @@ public sealed class CaptureClient
     /// <summary>Flushes the log and manifest so a reader sees everything written so far.</summary>
     public bool Flush() => Send("flush")?.Ok == true;
 
+    /// <summary>
+    /// Asks the service to shut down. This is the graceful path: it drains queued tile writes and flushes the
+    /// log before exiting, so the recording stays readable afterwards.
+    /// </summary>
+    public bool Shutdown() => Send("shutdown")?.Ok == true;
+
     private IpcEnvelope? Send(string command, Action<IpcEnvelope>? configure = null)
     {
         try

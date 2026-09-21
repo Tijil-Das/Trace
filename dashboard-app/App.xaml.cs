@@ -1,3 +1,4 @@
+using System.IO;
 using System.Threading;
 using System.Windows;
 
@@ -25,6 +26,17 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // TEMP-DEBUG: persistent crash log, remove once stable.
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            try { File.AppendAllText(@"T:\Coding\Trace\dev-data\dash-crash.log", $"{DateTime.Now:HH:mm:ss} [DOMAIN] {args.ExceptionObject}\n---\n"); } catch { }
+        };
+        DispatcherUnhandledException += (_, args) =>
+        {
+            try { File.AppendAllText(@"T:\Coding\Trace\dev-data\dash-crash.log", $"{DateTime.Now:HH:mm:ss} [DISPATCHER] {args.Exception}\n---\n"); } catch { }
+            args.Handled = true;
+        };
+        try { File.AppendAllText(@"T:\Coding\Trace\dev-data\dash-crash.log", $"{DateTime.Now:HH:mm:ss} [enter-OnStartup]\n"); } catch { }
         _singleInstance = new Mutex(true, "ScreenRecall.Dashboard.SingleInstance", out bool created);
         if (!created)
         {
@@ -35,7 +47,9 @@ public partial class App : System.Windows.Application
         }
 
         base.OnStartup(e);
+        try { File.AppendAllText(@"T:\Coding\Trace\dev-data\dash-crash.log", $"{DateTime.Now:HH:mm:ss} [before-TrayHost]\n"); } catch { }
         Tray = new TrayHost(Client, () => MainWindow?.Show(), () => Shutdown());
+        try { File.AppendAllText(@"T:\Coding\Trace\dev-data\dash-crash.log", $"{DateTime.Now:HH:mm:ss} [after-TrayHost ok]\n"); } catch { }
     }
 
     protected override void OnExit(ExitEventArgs e)

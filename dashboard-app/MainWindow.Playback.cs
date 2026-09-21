@@ -11,36 +11,52 @@ using MessageBox = System.Windows.MessageBox;
 
 namespace ScreenRecall.Dashboard;
 
-/// <summary>Playback, scrubbing, stepping and frame export.</summary>
+/// <summary>
+/// Playback, scrubbing, stepping and frame export. The engine is <see cref="SessionPlayer"/>: a wall-clock
+/// playhead over the raw log that renders on the display's own tick, so a quiet stretch of the day holds one
+/// still frame for its full duration instead of costing a canvas rebuild per tick.
+/// </summary>
 public partial class MainWindow
 {
     private void SeekTo(long timestampUs)
     {
-        if (_replayer is null)
+        if (_player is null)
         {
             return;
         }
 
-        _replayer.SeekTo(timestampUs);
+        _player.SeekTo(timestampUs);
         RenderCurrentFrame();
 
         if (!_scrubbing)
         {
-            Scrubber.Value = Math.Clamp(_replayer.PositionUs - _replayer.FirstTimestampUs, 0, Scrubber.Maximum);
+            Scrubber.Value = _player.PositionUs - _player.FirstTimestampUs;
         }
 
-        PositionText.Text = DateTimeOffset.UnixEpoch.AddTicks(_replayer.PositionUs * 10)
-            .LocalDateTime.ToString("HH:mm:ss.fff");
+        UpdatePositionText();
     }
 
+    /// <summary>
+    /// Draws the frame at the playhead. The pixel buffer belongs to the player and is reused on every frame, so
+    /// playback does not allocate a screen-sized array sixty times a second.
+    /// </summary>
     private void RenderCurrentFrame()
     {
-        if (_replayer is null)
+        if (_player is null)
         {
             return;
         }
 
-        RenderedFrame frame = _replayer.RenderVirtualDesktop();
+        RenderedFrame frame = _player.Render();
+        _needsRender = false;
+        if (_bridge is not null)
+        {
+            // With the React dashboard up, the WebView owns the pixels: pushing the frame there is the whole
+            // render, and drawing the now-hidden WPF image as well would be work nobody ever sees.
+            _bridge.PushFrame(frame, _player);
+            return;
+        }
+
         if (_bitmap is null || _bitmap.PixelWidth != frame.Width || _bitmap.PixelHeight != frame.Height)
         {
             // Bgr32 ignores the alpha byte: compositor frames are frequently transparent-black outside
@@ -52,55 +68,93 @@ public partial class MainWindow
         _bitmap.WritePixels(new Int32Rect(0, 0, frame.Width, frame.Height), frame.Bgra, frame.Stride, 0);
     }
 
-    private void OnPlayPause(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// One display tick: move the playhead by real elapsed time and redraw only when the canvas actually
+    /// changed. Held frames cost nothing here, which is what makes a quiet minute cheap to sit through.
+    /// </summary>
+    private void OnRenderTick()
     {
-        if (_replayer is null)
+        if (_player is null || !IsLoaded)
         {
             return;
         }
 
-        _isPlaying = !_isPlaying;
-        PlayButton.Content = _isPlaying ? "⏸ Pause" : "▶ Play";
-        if (_isPlaying)
+        PlaybackAdvance advance = _player.Advance();
+        _bridge?.Tick();
+        if (advance.CanvasChanged || _needsRender)
         {
-            _playbackTimer?.Start();
+            RenderCurrentFrame();
         }
-        else
+        else if (!_player.IsPlaying)
         {
-            _playbackTimer?.Stop();
+            return;
         }
+
+        SyncPlayheadUi();
     }
 
-    private void AdvancePlayback()
+    /// <summary>Mirrors the playhead into the scrubber and the clock label.</summary>
+    private void SyncPlayheadUi()
     {
-        if (_replayer is null || !_isPlaying || _playbackTimer is null)
+        if (_player is null)
         {
             return;
         }
 
-        long step = (long)(_playbackTimer.Interval.TotalMilliseconds * 1000 * _speed);
-        long target = _replayer.PositionUs + step;
-        if (target >= _replayer.LastTimestampUs)
+        if (!_scrubbing)
         {
-            target = _replayer.LastTimestampUs;
-            _isPlaying = false;
-            PlayButton.Content = "▶ Play";
-            _playbackTimer.Stop();
+            Scrubber.Value = Math.Clamp(_player.PositionUs - _player.FirstTimestampUs, 0, Scrubber.Maximum);
         }
 
-        SeekTo(target);
+        UpdatePositionText();
+        PlayButton.Content = _player.IsPlaying ? "⏸ Pause" : "▶ Play";
+    }
+
+    private void UpdatePositionText()
+    {
+        if (_player is null)
+        {
+            return;
+        }
+
+        PositionText.Text = DateTimeOffset.UnixEpoch.AddTicks(_player.PositionUs * 10)
+            .LocalDateTime.ToString("HH:mm:ss.fff");
+        PlaybackInfoText.Text = $"{_player.Speed:0.##}x  ·  {_player.SeekCount} seek(s)";
+    }
+
+    private void OnPlayPause(object sender, RoutedEventArgs e)
+    {
+        if (_player is null)
+        {
+            FramePlaceholder.Text = "Select a recorded day first.";
+            FramePlaceholder.Visibility = Visibility.Visible;
+            return;
+        }
+
+        if (_player.IsEmpty)
+        {
+            FramePlaceholder.Text = "This day holds nothing recorded to play.";
+            FramePlaceholder.Visibility = Visibility.Visible;
+            return;
+        }
+
+        _player.TogglePlay();
+        _needsRender = true;
+        SyncPlayheadUi();
     }
 
     private void OnSpeedChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        _speed = SpeedBox.SelectedIndex switch
+        _player?.SetSpeed(SpeedBox.SelectedIndex switch
         {
             0 => 0.5,
             1 => 1.0,
             2 => 2.0,
             3 => 4.0,
             _ => 8.0,
-        };
+        });
+
+        UpdatePositionText();
     }
 
     private void OnScrubStart(object sender, System.Windows.Controls.Primitives.DragStartedEventArgs e) => _scrubbing = true;
@@ -108,50 +162,69 @@ public partial class MainWindow
     private void OnScrubEnd(object sender, System.Windows.Controls.Primitives.DragCompletedEventArgs e)
     {
         _scrubbing = false;
-        if (_replayer is not null)
+        if (_player is not null)
         {
-            SeekTo(_replayer.FirstTimestampUs + (long)Scrubber.Value);
+            SeekTo(_player.FirstTimestampUs + (long)Scrubber.Value);
         }
     }
 
     private void OnScrub(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
-        if (!_scrubbing || _replayer is null || !IsLoaded)
+        if (!_scrubbing || _player is null || !IsLoaded)
         {
             return;
         }
 
-        SeekTo(_replayer.FirstTimestampUs + (long)e.NewValue);
+        SeekTo(_player.FirstTimestampUs + (long)e.NewValue);
     }
 
     private void OnStepForward(object sender, RoutedEventArgs e)
     {
-        if (_replayer is null)
+        if (_player is null)
         {
             return;
         }
 
-        long? next = _replayer.StepToNextEvent();
-        if (next is null)
+        if (_player.StepForward())
         {
-            return;
+            RenderCurrentFrame();
+            SyncPlayheadUi();
         }
-
-        RenderCurrentFrame();
-        Scrubber.Value = Math.Clamp(next.Value - _replayer.FirstTimestampUs, 0, Scrubber.Maximum);
-        PositionText.Text = DateTimeOffset.UnixEpoch.AddTicks(next.Value * 10).LocalDateTime.ToString("HH:mm:ss.fff");
     }
 
     private void OnStepBack(object sender, RoutedEventArgs e)
     {
-        if (_replayer is null)
+        if (_player is null)
         {
             return;
         }
 
-        // The log is forward-only, so stepping back costs a re-seek — the same trade a video makes when
-        // you scrub back before the previous keyframe. One second is close enough for review.
-        SeekTo(Math.Max(_replayer.FirstTimestampUs, _replayer.PositionUs - 1_000_000));
+        // One event, not one second: the log is forward-only, so this costs a re-seek — the same trade a video
+        // makes when you scrub back before the previous keyframe.
+        if (_player.StepBackward())
+        {
+            RenderCurrentFrame();
+            SyncPlayheadUi();
+        }
+    }
+
+    /// <summary>Jumps past the next quiet stretch, so a silent hour does not have to be sat through.</summary>
+    private void OnSkipIdle(object sender, RoutedEventArgs e)
+    {
+        if (_player is null)
+        {
+            return;
+        }
+
+        IdleSpan? span = _player.IdleSpanAfter(_player.PositionUs);
+        if (span is null)
+        {
+            PlaybackInfoText.Text = "no quiet stretch ahead";
+            return;
+        }
+
+        SeekTo(span.EndUs);
+        PlaybackInfoText.Text = $"skipped {span.DurationUs / 1_000_000.0:0.0}s with no change";
     }
 
     private void OnPreviousDay(object sender, RoutedEventArgs e) => StepDay(1);
@@ -171,7 +244,7 @@ public partial class MainWindow
 
     private void OnFocusDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (FocusList.SelectedItem is FocusItem item && _replayer is not null)
+        if (FocusList.SelectedItem is FocusItem item && _player is not null)
         {
             SeekTo(item.StartTs * 1000);
         }
@@ -179,12 +252,12 @@ public partial class MainWindow
 
     private void OnSaveFrame(object sender, RoutedEventArgs e)
     {
-        if (_replayer is null)
+        if (_player is null)
         {
             return;
         }
 
-        RenderedFrame frame = _replayer.RenderVirtualDesktop();
+        RenderedFrame frame = _player.Render();
         string path = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
             $"screen-recall-{_day:yyyy-MM-dd}-{PositionText.Text.Replace(':', '-')}.png");

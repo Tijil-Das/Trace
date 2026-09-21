@@ -80,6 +80,35 @@ public sealed class CodecTests
     }
 
     [Fact]
+    public void ArchiveCodecIsLosslessAndDenserThanQoi()
+    {
+        byte[] bgra = new byte[64 * 64 * 4];
+        Random random = new(21);
+        for (int y = 0; y < 64; y++)
+        {
+            bool flat = y < 40;
+            for (int x = 0; x < 64; x++)
+            {
+                int offset = ((y * 64) + x) * 4;
+                bgra[offset] = flat ? (byte)0x1A : (byte)random.Next(256);
+                bgra[offset + 1] = flat ? (byte)0x2B : (byte)random.Next(256);
+                bgra[offset + 2] = flat ? (byte)0x3C : (byte)random.Next(256);
+                bgra[offset + 3] = 0xFF;
+            }
+        }
+
+        byte[] qoi = QoiTileCodec.Instance.Encode(bgra, 64, 64);
+        byte[] archive = TileCodecs.Archive.Encode(bgra, 64, 64);
+
+        Assert.True(TileCodecs.Archive.IsLossless);
+        Assert.Equal(3, TileCodecs.Archive.Id);
+        Assert.Equal(bgra, TileCodecs.Archive.Decode(archive).Bgra);
+        Assert.True(archive.Length < qoi.Length, $"archive {archive.Length} should beat QOI start point {qoi.Length}");
+        Assert.Same(TileCodecs.Archive, TileCodecs.ById(3));
+        Assert.Same(TileCodecs.Archive, TileCodecs.FromFidelityMode("archive"));
+    }
+
+    [Fact]
     public void PngWriterEmitsAValidHeader()
     {
         byte[] bgra = new byte[8 * 8 * 4];

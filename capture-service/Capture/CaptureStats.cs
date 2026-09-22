@@ -58,6 +58,21 @@ internal sealed class CaptureStats
     /// <summary>Tile payloads queued for the background writer and not yet on disk.</summary>
     internal int AssetQueueDepth { get; set; }
 
+    /// <summary>Tiles the codec was asked to encode in the most recent frame.</summary>
+    internal int LastEncodedTiles { get; set; }
+
+    /// <summary>
+    /// Wall time of the tile loop for the last frame, when the per-tile phase split is off. Zero when
+    /// <see cref="DetailedTiming"/> is on, because then the split carries the same information at finer grain.
+    /// </summary>
+    internal double LastTileLoopMs { get; set; }
+
+    /// <summary>True when the per-tile phase split (hash/encode/store/log) was measured for the last frame.</summary>
+    internal bool DetailedTiming { get; set; }
+
+    /// <summary>Hashes the dedupe cache was seeded with when the session opened.</summary>
+    internal int DedupeCacheSeeded { get; set; }
+
     /// <summary>Log records dropped because they were zero-filled (writer integrity faults).</summary>
     internal long LogZeroRecordFaults { get; set; }
 
@@ -113,6 +128,21 @@ internal sealed class CaptureStats
     internal double AverageFrameMs { get; set; }
 
     internal int ThrottleLevel { get; set; }
+
+    /// <summary>Pause the cadence is currently inserting between frames, in milliseconds (0 when unpaced).</summary>
+    internal double PaceIntervalMs { get; set; }
+
+    /// <summary>Frames the loop deliberately waited after, to stay inside the CPU budget.</summary>
+    internal long FramesPaced { get; set; }
+
+    /// <summary>Dedupe cache lookups that found the hash without touching the store.</summary>
+    internal long DedupeCacheHits { get; set; }
+
+    /// <summary>Dedupe cache lookups that escaped to a filesystem existence probe on the capture thread.</summary>
+    internal long DedupeCacheMisses { get; set; }
+
+    /// <summary>Hashes the dedupe cache currently remembers.</summary>
+    internal int DedupeCacheEntries { get; set; }
 
     /// <summary>Process CPU percentage since the previous sample (0 when called too soon).</summary>
     internal double SampleCpuPercent()

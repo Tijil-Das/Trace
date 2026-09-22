@@ -1,3 +1,4 @@
+using ScreenRecall.CaptureService.Dxgi;
 using ScreenRecall.Storage;
 
 namespace ScreenRecall.CaptureService.Capture;
@@ -72,6 +73,21 @@ internal sealed class SourceFrame
     internal bool HasChanges => FullRescan || DirtyRects.Count > 0 || MoveRects.Count > 0;
 }
 
+/// <summary>
+/// A source's "I cannot capture right now" state, so the service can say why instead of substituting something
+/// else (spec 5.7 / 13). <see cref="IsExpected"/> distinguishes the reasons that clear on their own - a locked
+/// session, a disconnected Remote Desktop session, a second instance - from genuine failures.
+/// </summary>
+internal readonly record struct SourceBlock(DxgiStatus.UnavailableReason Reason, string Detail, int RetryInMs)
+{
+    /// <summary>True for causes that are normal on a working machine and fix themselves.</summary>
+    internal bool IsExpected => DxgiStatus.IsExpected(Reason);
+
+    /// <summary>One line for the dashboard's state readout.</summary>
+    internal string Describe()
+        => Detail.Length == 0 ? DxgiStatus.Describe(Reason) : $"{DxgiStatus.Describe(Reason)}: {Detail}";
+}
+
 /// <summary>A capture backend: DXGI desktop duplication, or the synthetic generator used in tests.</summary>
 internal interface IFrameSource : IDisposable
 {
@@ -80,6 +96,19 @@ internal interface IFrameSource : IDisposable
 
     /// <summary>Monitors this source can serve.</summary>
     IReadOnlyList<MonitorInfo> Monitors { get; }
+
+    /// <summary>
+    /// Why this source cannot deliver frames right now (null while it can), and when it will try again. The
+    /// service surfaces this rather than recording something else: a source that cannot capture says so.
+    /// </summary>
+    SourceBlock? Block { get; }
+
+    /// <summary>
+    /// True while the engine needs every pixel of the next frame, because a full-surface rescan is pending. A
+    /// backend that reads back only the regions DXGI reports must honour this: otherwise the tiles outside those
+    /// regions still hold pixels from an earlier frame and would be hashed - and logged - as current content.
+    /// </summary>
+    bool FullFrameRequired { get; set; }
 
     /// <summary>
     /// Waits up to <paramref name="timeout"/> for a frame. False means "nothing changed in time";

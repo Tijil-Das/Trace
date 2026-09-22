@@ -132,10 +132,17 @@ internal sealed partial class CaptureEngine
         MonitorInfo monitor = frame.Monitor;
         int changes = 0;
         Span<byte> scratch = _tileScratch;
+        bool detailed = _detailedTiming;
         double hashMs = 0;
         double encodeMs = 0;
         double storeMs = 0;
         double logMs = 0;
+        int encodedTiles = 0;
+
+        // One timestamp pair around the whole loop when the per-tile split is off: the loop total still lands in
+        // LastProcessMs (measured by the caller), so a production run keeps a per-frame number for two reads
+        // instead of eight reads per tile. See RecallConfig.DetailedTiming.
+        long loopStart = detailed ? 0 : Stopwatch.GetTimestamp();
 
         foreach (long packed in _cells.Packed)
         {
@@ -152,11 +159,15 @@ internal sealed partial class CaptureEngine
                 continue;
             }
 
-            long phase = Stopwatch.GetTimestamp();
+            long phase = detailed ? Stopwatch.GetTimestamp() : 0;
             CopyTile(frame, x, y, width, height, scratch);
             int length = width * height * 4;
             ulong hash = TileHash.Compute(scratch[..length], width, height);
-            hashMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+            if (detailed)
+            {
+                hashMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+            }
+
             _stats.TilesHashed++;
 
             if (canvas[index] == hash)
@@ -166,13 +177,29 @@ internal sealed partial class CaptureEngine
 
             if (!_dedupe.Contains(hash) && !_session.Assets.Contains(hash))
             {
-                phase = Stopwatch.GetTimestamp();
-                byte[] payload = _codec.Encode(scratch[..length], width, height);
-                encodeMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+                if (detailed)
+                {
+                    phase = Stopwatch.GetTimestamp();
+                }
 
-                phase = Stopwatch.GetTimestamp();
+                byte[] payload = _codec.Encode(scratch[..length], width, height);
+                if (detailed)
+                {
+                    encodeMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+                }
+
+                encodedTiles++;
+                if (detailed)
+                {
+                    phase = Stopwatch.GetTimestamp();
+                }
+
                 _assetWriter.Enqueue(hash, _codec.Id, width, height, payload);
-                storeMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+                if (detailed)
+                {
+                    storeMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+                }
+
                 _stats.TilesStored++;
             }
             else
@@ -182,10 +209,17 @@ internal sealed partial class CaptureEngine
 
             _dedupe.Add(hash);
 
-            phase = Stopwatch.GetTimestamp();
+            if (detailed)
+            {
+                phase = Stopwatch.GetTimestamp();
+            }
+
             _log.Append(LogEntry.Draw(timestampUs, windowId, monitor.Id, cellX, cellY, hash));
             _manifest.Add(hash);
-            logMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+            if (detailed)
+            {
+                logMs += Stopwatch.GetElapsedTime(phase).TotalMilliseconds;
+            }
 
             _stats.LogEntriesWritten++;
             canvas[index] = hash;
@@ -197,8 +231,17 @@ internal sealed partial class CaptureEngine
         _stats.LastEncodeMs = Math.Round(encodeMs, 2);
         _stats.LastStoreMs = Math.Round(storeMs, 2);
         _stats.LastLogMs = Math.Round(logMs, 2);
+        _stats.LastEncodedTiles = encodedTiles;
+        _stats.LastTileLoopMs = detailed ? 0 : Math.Round(Stopwatch.GetElapsedTime(loopStart).TotalMilliseconds, 2);
+        _stats.DetailedTiming = detailed;
         _stats.AssetsBytesWritten = _assetWriter.BytesWritten;
         _stats.AssetQueueDepth = (int)_assetWriter.PendingCount;
+
+        // Published so the miss rate is visible: every miss is a filesystem existence probe on this thread, which is
+        // the cost the segmented cache exists to keep rare.
+        _stats.DedupeCacheHits = _dedupe.Hits;
+        _stats.DedupeCacheMisses = _dedupe.Misses;
+        _stats.DedupeCacheEntries = _dedupe.Count;
         return changes;
     }
 }

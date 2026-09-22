@@ -3,6 +3,7 @@ using ScreenRecall.CaptureService.Cli;
 using ScreenRecall.CaptureService.Dxgi;
 using ScreenRecall.CaptureService.Ipc;
 using ScreenRecall.Storage;
+using Vortice.DXGI;
 
 namespace ScreenRecall.CaptureService;
 
@@ -32,6 +33,8 @@ internal static class ProbeCommand
             List<MonitorInfo> monitors = DxgiOutputEnumerator.EnumerateMonitors(config.TileSize);
             Console.WriteLine($"dxgi outputs   : {monitors.Count}");
             PrintMonitors(monitors);
+            Console.WriteLine();
+            PrintAdapters();
 
             using DxgiFrameSource source = DxgiFrameSource.Create(config.TileSize, null);
             Console.WriteLine();
@@ -45,7 +48,7 @@ internal static class ProbeCommand
             {
                 Console.WriteLine();
                 Console.WriteLine("Duplication is unavailable here: session 0, a locked workstation, or a");
-                Console.WriteLine("virtual display driver. Use --synthetic for validation on such machines.");
+                Console.WriteLine("virtual display driver. Use --synthetic-test for validation on such machines.");
                 return 2;
             }
 
@@ -87,6 +90,45 @@ internal static class ProbeCommand
             Console.WriteLine(
                 $"  #{monitor.Id} {monitor.DeviceName,-28} {monitor.Width}x{monitor.Height} at ({monitor.X},{monitor.Y}) "
                 + $"grid {monitor.Columns}x{monitor.Rows} = {monitor.TileCount} tiles");
+        }
+    }
+
+    /// <summary>
+    /// Lists the GPU adapters DXGI sees, with the two facts a compute-offload decision needs: whether the adapter
+    /// carries real (or dedicated) memory rather than being a software fallback, and which one Windows prefers for
+    /// GPU work. This is inventory for that decision, not a migration to one.
+    /// </summary>
+    private static void PrintAdapters()
+    {
+        using IDXGIFactory1 factory = DXGI.CreateDXGIFactory1<IDXGIFactory1>();
+        int index = 0;
+
+        for (uint adapterIndex = 0; ; adapterIndex++)
+        {
+            if (factory.EnumAdapters1(adapterIndex, out IDXGIAdapter1? adapter).Failure || adapter is null)
+            {
+                break;
+            }
+
+            try
+            {
+                AdapterDescription1 description = adapter.Description1;
+                string kind = description.Flags == AdapterFlags.None ? "hardware" : description.Flags.ToString().ToLowerInvariant();
+                Console.WriteLine(
+                    $"adapter #{index}    : {description.Description.Trim()} ({kind}, "
+                    + $"dedicated {description.DedicatedVideoMemory / 1024 / 1024} MB, "
+                    + $"shared {description.SharedSystemMemory / 1024 / 1024} MB)");
+                index++;
+            }
+            finally
+            {
+                adapter.Dispose();
+            }
+        }
+
+        if (index == 0)
+        {
+            Console.WriteLine("adapters       : none reported by DXGI");
         }
     }
 }

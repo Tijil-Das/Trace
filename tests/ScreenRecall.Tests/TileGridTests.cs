@@ -82,6 +82,41 @@ public sealed class TileGridTests
     }
 
     [Fact]
+    public void HashIsStableAcrossReuse()
+    {
+        // TileHash keeps one hasher per thread and resets it per tile. State leaking from one tile into the next
+        // would make identical content hash differently, and the dedupe layer would read that as "new content"
+        // forever - quietly inflating both the log and the store.
+        byte[] tile = new byte[64 * 64 * 4];
+        byte[] other = new byte[64 * 64 * 4];
+        Random random = new(99);
+        random.NextBytes(tile);
+        random.NextBytes(other);
+
+        ulong expected = TileHash.Compute(tile, 64, 64);
+
+        // Interleave other work, then hash the same tile again: the answer must not depend on what came between.
+        for (int i = 0; i < 50; i++)
+        {
+            TileHash.Compute(other, 64, 64);
+            TileHash.ComputeRegion(tile, 64 * 4, 0, 0, 64, 64);
+        }
+
+        Assert.Equal(expected, TileHash.Compute(tile, 64, 64));
+
+        // The region path hashes the same pixels to the same value, strided or not.
+        Assert.Equal(expected, TileHash.ComputeRegion(tile, 64 * 4, 0, 0, 64, 64));
+
+        byte[] strided = new byte[128 * 64 * 4];
+        for (int row = 0; row < 64; row++)
+        {
+            Array.Copy(tile, row * 64 * 4, strided, row * 128 * 4, 64 * 4);
+        }
+
+        Assert.Equal(expected, TileHash.ComputeRegion(strided, 128 * 4, 0, 0, 64, 64));
+    }
+
+    [Fact]
     public void CellSetDeduplicatesOverlappingRects()
     {
         MonitorInfo monitor = new(0, "test", 0, 0, 256, 256, 64);

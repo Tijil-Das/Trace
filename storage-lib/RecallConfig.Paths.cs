@@ -12,6 +12,8 @@ public sealed partial class RecallConfig
         TileSize = TileSize,
         IdlePollMs = IdlePollMs,
         BurstPollMs = BurstPollMs,
+        MaxPaceMs = MaxPaceMs,
+        DetailedTiming = DetailedTiming,
         CheckpointSeconds = CheckpointSeconds,
         CaptureAllMonitors = CaptureAllMonitors,
         MonitorIds = MonitorIds.ToList(),

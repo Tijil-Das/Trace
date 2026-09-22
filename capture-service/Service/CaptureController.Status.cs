@@ -160,14 +160,29 @@ internal sealed partial class CaptureController
                 LastLogMs: 0,
                 LogZeroRecordFaults: 0,
                 LogExternalWriterDetected: false,
-                AssetQueueDepth: 0);
+                AssetQueueDepth: 0,
+                PaceIntervalMs: 0,
+                FramesPaced: 0,
+                UnavailableReason: null,
+                UnavailableDetail: null,
+                RetryInSeconds: 0,
+                DedupeCacheHits: 0,
+                DedupeCacheMisses: 0,
+                DedupeCacheEntries: 0,
+                LastEncodedTiles: 0,
+                DetailedTiming: false,
+                LastTileLoopMs: 0,
+                DedupeCacheSeeded: 0);
         }
 
         CaptureStats stats = engine.Stats;
         (long assetCount, long assetBytes) = engine.AssetStats();
+        SourceBlock? block = engine.Source.Block;
 
         return new StatusDto(
-            State: stats.Paused ? "paused" : "recording",
+            // "no-output" is a state of its own, not a flavour of paused: the recorder is deliberately doing
+            // nothing because it cannot see the desktop, and saying so is the whole point (spec 13).
+            State: stats.Paused ? "paused" : block is null ? "recording" : "no-output",
             Paused: stats.Paused,
             StartedUtc: stats.StartedUtc.ToString("o"),
             UptimeSeconds: stats.UptimeSeconds,
@@ -211,7 +226,19 @@ internal sealed partial class CaptureController
             LastLogMs: stats.LastLogMs,
             LogZeroRecordFaults: stats.LogZeroRecordFaults,
             LogExternalWriterDetected: stats.LogExternalWriterDetected,
-            AssetQueueDepth: stats.AssetQueueDepth);
+            AssetQueueDepth: stats.AssetQueueDepth,
+            PaceIntervalMs: stats.PaceIntervalMs,
+            FramesPaced: stats.FramesPaced,
+            UnavailableReason: block?.Reason.ToString(),
+            UnavailableDetail: block?.Describe(),
+            RetryInSeconds: (block?.RetryInMs ?? 0) / 1000.0,
+            DedupeCacheHits: stats.DedupeCacheHits,
+            DedupeCacheMisses: stats.DedupeCacheMisses,
+            DedupeCacheEntries: stats.DedupeCacheEntries,
+            LastEncodedTiles: stats.LastEncodedTiles,
+            DetailedTiming: stats.DetailedTiming,
+            LastTileLoopMs: stats.LastTileLoopMs,
+            DedupeCacheSeeded: stats.DedupeCacheSeeded);
 
     }
 

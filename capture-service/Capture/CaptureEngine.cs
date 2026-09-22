@@ -17,6 +17,15 @@ internal sealed partial class CaptureEngine : IDisposable
     /// </summary>
     private const int FullRescanMinIntervalMs = 1000;
 
+    /// <summary>
+    /// Payloads still queued past which the capture loop's routine log flush is deferred rather than waited out.
+    /// At the measured store ceiling (~200 files/s, docs/VALIDATION.md §2) half the queue is already two seconds of
+    /// writing, and blocking the capture thread that long to flush a log that could be flushed next interval is the
+    /// wrong trade - the log simply stays buffered, so the ordering rule still holds: nothing becomes durable
+    /// before the tiles it references. Control paths never defer; see FlushSessionState.
+    /// </summary>
+    internal const int DrainHighWater = 512;
+
     private readonly object _sync = new();
     private readonly CaptureStats _stats = new();
     private readonly DedupeCache _dedupe = new();
@@ -48,6 +57,12 @@ internal sealed partial class CaptureEngine : IDisposable
     private bool _owedRescan;
     private long _lastAssetStatsMs;
     private int _assetStatsRefreshing;
+
+    /// <summary>
+    /// True only in tests, where the store is small and the stats figure is awaited synchronously. Set by the
+    /// constructor of the test seam; production leaves it false so the first stats walk is off-thread.
+    /// </summary>
+    internal bool _assetStatsPrimed;
     private long _lastSessionBytesMs;
     private long _cachedSessionBytes;
     private int _sessionBytesRefreshing;
@@ -68,7 +83,8 @@ internal sealed partial class CaptureEngine : IDisposable
         _exclusions = new ExclusionMatcher(_config.ExcludedProcesses, _config.ExcludedTitlePatterns);
         _foreground = new ForegroundWindowTracker(_exclusions);
         _codec = TileCodecs.FromFidelityMode(_config.FidelityMode);
-        _cadence = new AdaptiveCadence(_config.IdlePollMs, _config.BurstPollMs);
+        _detailedTiming = _config.DetailedTiming;
+        _cadence = new AdaptiveCadence(_config.IdlePollMs, _config.BurstPollMs, maxPaceMs: _config.MaxPaceMs);
         _tileScratch = new byte[Math.Max(_config.TileSize * _config.TileSize * 4, 64 * 64 * 4)];
         _day = DateOnly.FromDateTime(DateTimeOffset.Now.LocalDateTime);
 
@@ -90,6 +106,82 @@ internal sealed partial class CaptureEngine : IDisposable
         _assetWriter = new AssetWriteQueue(_session.Assets);
         PrepareSessionStorage();
         SeedCanvasFromLatestCheckpoint();
+
+        // Seed the dedupe cache from the manifests *before* the first frame is accepted. A store that already holds
+        // hundreds of thousands of tiles is otherwise invisible to a cache that starts empty, so the opening full
+        // rescan probes the filesystem once per tile. The manifests are exactly the record of what is stored, and
+        // they are 8 bytes per hash: reading them is one sequential pass, against a per-tile CreateFile on the
+        // capture thread. See docs/PERFORMANCE.md §5a.
+        SeedDedupeCache();
+    }
+
+    /// <summary>True while the per-tile phase split is being measured (see RecallConfig.DetailedTiming).</summary>
+    private bool _detailedTiming;
+
+    /// <summary>
+    /// Fills the dedupe cache from the session manifests so a warm store never starts invisible.
+    ///
+    /// Walks today's manifest parts, then the most recent previous days, newest first, stopping as soon as the
+    /// cache is full or a time budget is spent. Bounded on purpose: a store with millions of tiles would otherwise
+    /// make startup proportional to its whole history, and the newest days are where the tiles currently on screen
+    /// actually live. Reading is one sequential pass of 8-byte records; the alternative is one `CreateFile` per
+    /// tile on the capture thread for every tile already stored.
+    /// </summary>
+    private void SeedDedupeCache()
+    {
+        try
+        {
+            int budget = _dedupe.Capacity;
+            List<string> sources = new();
+            sources.AddRange(AssetManifest.FilesFor(_session.SessionDir));
+
+            for (int back = 1; back <= 7 && sources.Count < 64; back++)
+            {
+                string dir = SessionLayout.SessionDir(_session.Root, _day.AddDays(-back));
+                if (Directory.Exists(dir))
+                {
+                    sources.AddRange(AssetManifest.FilesFor(dir));
+                }
+            }
+
+            int seeded = 0;
+            foreach (string path in sources)
+            {
+                if (_dedupe.Count >= budget)
+                {
+                    break;
+                }
+
+                foreach (ulong hash in AssetManifest.ReadHashes(path))
+                {
+                    if (!_dedupe.AddIfNew(hash))
+                    {
+                        // Newest-first is already enforced by the source order; once the cache refuses (full, or a
+                        // hash already present from an earlier part), there is nothing more this file can teach it.
+                        if (_dedupe.Count >= budget)
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    seeded++;
+                    if (_dedupe.Count >= budget)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            _stats.DedupeCacheSeeded = seeded;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A seed that fails is only a slower first rescan, never a correctness problem: a cache miss falls
+            // through to the same existence probe it always did.
+            _stats.LastError = $"dedupe cache seed failed: {ex.Message}";
+        }
     }
 
     /// <summary>Live counters for the dashboard and the CLI.</summary>
@@ -142,9 +234,18 @@ internal sealed partial class CaptureEngine : IDisposable
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (_lastAssetStatsMs == 0)
         {
-            // First call has nothing cached to return, and at startup the store is small: answer
-            // synchronously so the CLI and the first dashboard poll get real numbers.
-            RefreshAssetStats(nowMs);
+            // First call has nothing cached to return. At production startup the store is large and the walk
+            // would take minutes, so answer empty and queue the walk — the dashboard tolerates a zero first
+            // paint, and a 30 s-profile put this walk at 81% of the capture thread's samples when it ran
+            // synchronously here. Tests use a tiny store; they can afford to wait.
+            if (_assetStatsPrimed)
+            {
+                RefreshAssetStats(nowMs);
+            }
+            else
+            {
+                QueueAssetStatsRefresh(nowMs);
+            }
         }
         else if (nowMs - _lastAssetStatsMs >= refreshIntervalMs)
         {

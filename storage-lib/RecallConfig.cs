@@ -28,6 +28,15 @@ public sealed partial class RecallConfig
     /// <summary>Acquire timeout during bursts of change (0 = return as soon as a frame is ready).</summary>
     public int BurstPollMs { get; set; }
 
+    /// <summary>
+    /// Longest pause the capture governor inserts between frames with changes (spec 5.8), in milliseconds — and so
+    /// the floor on the capture rate (250 means roughly four frames a second in the worst case). Governing bounds
+    /// frames/second by what frames cost rather than by a fixed rate, so cheap frames run fast and only expensive
+    /// ones are paced. Zero disables pacing entirely (tests, which validate the pipeline's invariants rather than
+    /// its pacing, set it to 0).
+    /// </summary>
+    public int MaxPaceMs { get; set; } = 250;
+
     /// <summary>How often a full-state checkpoint is written (spec 5.6).</summary>
     public int CheckpointSeconds { get; set; } = 180;
 
@@ -67,6 +76,18 @@ public sealed partial class RecallConfig
     /// <summary>Global pause/resume hotkey registered by the dashboard.</summary>
     public string PauseHotkey { get; set; } = "Ctrl+Alt+P";
 
+    /// <summary>
+    /// Per-tile phase timing for the diagnostics readout (`LastHashMs`/`LastEncodeMs`/`LastStoreMs`/`LastLogMs`).
+    ///
+    /// Off by default, and that default is a measured decision: four <c>Stopwatch.GetElapsedTime</c> pairs per tile
+    /// were **23% of capture-thread samples** in a 30 s `dotnet-trace` of a Release recorder (`docs/PERFORMANCE.md`
+    /// §5a) — the largest single cost on the thread, larger than encoding, hashing and the filesystem probe
+    /// combined. The split is genuinely useful when you are chasing where a frame went, so it is kept behind this
+    /// switch and turned on by the benchmark harness, which needs exactly those numbers. A production Release run
+    /// pays two timestamp reads per *frame* instead of eight per *tile*.
+    /// </summary>
+    public bool DetailedTiming { get; set; }
+
     /// <summary>Clamps user input into sane ranges and normalises enumerations.</summary>
     public RecallConfig Normalize()
     {
@@ -74,6 +95,7 @@ public sealed partial class RecallConfig
         TileSize = Math.Clamp(TileSize, 16, 512);
         IdlePollMs = Math.Clamp(IdlePollMs, 50, 5000);
         BurstPollMs = Math.Clamp(BurstPollMs, 0, 500);
+        MaxPaceMs = Math.Clamp(MaxPaceMs, 0, 5000);
         CheckpointSeconds = Math.Clamp(CheckpointSeconds, 10, 3600);
         MaxDailyMegabytes = Math.Clamp(MaxDailyMegabytes, 64, 1024 * 1024);
         MinFreeDiskMegabytes = Math.Clamp(MinFreeDiskMegabytes, 128, 1024 * 1024);

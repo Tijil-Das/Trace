@@ -14,6 +14,7 @@ internal static class BenchCommand
 {
     internal static int Run(int tileCount, string? rootOverride)
     {
+        BuildConfiguration.WarnIfNotOptimized("the per-primitive timings");
         tileCount = Math.Clamp(tileCount <= 0 ? 512 : tileCount, 16, 200_000);
         string root = rootOverride ?? Path.Combine(Path.GetTempPath(), "screen-recall-bench", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(root);

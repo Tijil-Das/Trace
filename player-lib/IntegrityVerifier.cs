@@ -84,7 +84,7 @@ public static class IntegrityVerifier
 
         foreach (ulong hash in referenced)
         {
-            if (!store.Assets.Contains(hash))
+            if (!store.Assets.Contains(hash, checkDisk: true))
             {
                 missing++;
                 AddExample(examples, maxExamples, $"missing asset {TileHash.ToHex(hash)}");

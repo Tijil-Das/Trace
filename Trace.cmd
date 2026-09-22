@@ -10,6 +10,7 @@ REM    Trace.cmd restart    stop, then start
 REM    Trace.cmd status     what is running, what is registered, what it costs
 REM    Trace.cmd build      build the .NET solution (Release)
 REM    Trace.cmd test       run the xUnit suite
+REM    Trace.cmd bench [m]  CPU budget check (spec 3): [m] min idle + [m] min active, default 5, logged
 REM    Trace.cmd ui         build the React dashboard (needs npm)
 REM    Trace.cmd dev-ui     run the dashboard against the Vite dev server
 REM
@@ -38,6 +39,7 @@ if /i "%ACTION%"=="build"   goto :build
 if /i "%ACTION%"=="test"    goto :test
 if /i "%ACTION%"=="ui"      goto :ui
 if /i "%ACTION%"=="dev-ui"  goto :devui
+if /i "%ACTION%"=="bench"   goto :bench
 echo Unknown action "%ACTION%".
 goto :usage
 
@@ -165,6 +167,27 @@ set "TRACE_ROOT=!STORE_ROOT!"
 powershell -NoProfile -Command "$r = $env:TRACE_ROOT; $s = Join-Path $r 'sessions'; if (-not (Test-Path $s)) { Write-Host '  no recorded days'; exit 0 }; $days = Get-ChildItem $s -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^\d{4}-\d{2}-\d{2}$' } | Sort-Object Name -Descending; if (-not $days) { Write-Host '  no recorded days'; exit 0 }; foreach ($d in $days) { $logs = @(Get-ChildItem (Join-Path $d.FullName 'log*.bin') -File -ErrorAction SilentlyContinue); $bytes = ($logs | Measure-Object Length -Sum).Sum; $ck = @(Get-ChildItem (Join-Path $d.FullName 'checkpoints\*.ckpt') -File -ErrorAction SilentlyContinue).Count; Write-Host ('  {0}   log {1:N1} KB in {2} segment(s), {3} checkpoint(s)' -f $d.Name, ($bytes / 1KB), $logs.Count, $ck) }" 2>nul
 goto :eof
 
+REM ---------------------------------------------------------------- bench ----
+:bench
+REM The spec's one hard performance requirement is <2% steady-state CPU on a Release build (spec 3). Run
+REM this before calling any capture-loop change done. A Debug build cannot produce evidence here - the
+REM harness detects that itself and refuses to certify the run.
+if not exist "%CAPTURE%" (
+  echo [bench] recorder not built yet - building
+  call "%~f0" build || exit /b 1
+)
+set "BENCH_MIN=%~2"
+if "%BENCH_MIN%"=="" set "BENCH_MIN=5"
+if not exist ".dev-logs" mkdir ".dev-logs"
+echo [bench] Release CPU budget: %BENCH_MIN% min static screen + %BENCH_MIN% min active use
+echo [bench] phase 1 needs a static screen: hands off the mouse and keyboard until phase 2 starts
+echo.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$log = Join-Path '.dev-logs' ('cpu-bench-' + (Get-Date -Format 'yyyy-MM-dd-HHmmss') + '.log'); & '%CAPTURE%' --cpu-bench %BENCH_MIN% 2>&1 | Tee-Object -FilePath $log; $code = $LASTEXITCODE; Write-Host ''; Write-Host ('[bench] log: ' + (Resolve-Path $log)); if ($code -eq 2) { Write-Host '[bench] INVALID measurement: Debug build, a busy idle phase, or nothing recorded' }; exit $code"
+if errorlevel 2 (echo [bench] FAILED - the measurement was not valid; fix the INVALID verdict above and rerun & exit /b 2)
+if errorlevel 1 (echo [bench] FAILED - over the 2 percent steady-state budget & exit /b 1)
+echo [bench] within budget
+goto :eof
+
 REM ---------------------------------------------------------------- test -----
 :test
 "%DOTNET%" test tests\ScreenRecall.Tests\ScreenRecall.Tests.csproj -c Release --nologo
@@ -181,4 +204,4 @@ popd
 goto :eof
 
 :usage
-echo   Trace.cmd [start ^| stop ^| restart ^| status ^| build ^| test ^| ui ^| dev-ui]
+echo   Trace.cmd [start ^| stop ^| restart ^| status ^| build ^| test ^| bench ^| ui ^| dev-ui]

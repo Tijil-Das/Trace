@@ -46,6 +46,15 @@ internal sealed partial class SyntheticFrameSource : IFrameSource
 
     public IReadOnlyList<MonitorInfo> Monitors { get; }
 
+    /// <summary>
+    /// Ignored: the synthetic source owns its whole buffer and always hands back every pixel, so a pending
+    /// rescan needs nothing special from it.
+    /// </summary>
+    public bool FullFrameRequired { get; set; }
+
+    /// <summary>Never blocked: it is the test source, and it generates its own desktop.</summary>
+    public SourceBlock? Block => null;
+
     /// <summary>Frames handed out so far.</summary>
     internal int FramesGenerated => _frameIndex;
 

@@ -17,6 +17,7 @@ internal static class OnceCommand
 {
     internal static int Run(RecallConfig config, CommandLine commandLine)
     {
+        BuildConfiguration.WarnIfNotOptimized("the CPU, tiles/sec and byte-rate figures");
         RecallConfig effective = config.Clone().Normalize();
         if (commandLine.RootOverride is null && !commandLine.Synthetic && !commandLine.ConfigExplicit)
         {

@@ -186,12 +186,17 @@ public sealed class LongRunHousekeepingTests : IDisposable
             TileSize = 64,
             IdlePollMs = 50,
             BurstPollMs = 0,
+
+            // This test asserts background refresh behaviour, not the pacing governor: a paced loop would only
+            // turn a 3-second window into a race with the store.
+            MaxPaceMs = 0,
             ExcludedProcesses = new List<string>(),
             ExcludedTitlePatterns = new List<string>(),
         };
 
         using SyntheticFrameSource source = new(width: 480, height: 320, frameIntervalMs: 5, tileSize: 64);
         using CaptureEngine engine = new(config, source);
+        engine._assetStatsPrimed = true;
 
         // Startup value: whatever the session folder holds before anything is captured.
         long initial = engine.SessionBytes();
@@ -264,7 +269,11 @@ public sealed class LongRunHousekeepingTests : IDisposable
 
         (long count, long bytes) = session.Assets.ComputeStats();
         Assert.Equal(1, count);
-        Assert.Equal(new FileInfo(session.Assets.PathFor(hash)).Length, bytes);
+
+        // The tile is packed, not a lone file: the stats count it and account its record bytes.
+        Assert.True(session.Assets.TryReadInfo(hash, out AssetInfo info));
+        Assert.Equal(info.PayloadLength + AssetStore.HeaderSize, bytes);
+        Assert.True(info.CodecId == QoiTileCodec.Instance.Id && info.Width == width && info.Height == height);
 
         // The session folder itself holds the log; the assets live under their own root.
         using (SessionLogWriter log = session.OpenLog(DateTimeOffset.Now))

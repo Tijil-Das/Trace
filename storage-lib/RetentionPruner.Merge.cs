@@ -40,12 +40,28 @@ public sealed partial class RetentionPruner
 
             try
             {
-                if (File.GetLastWriteTimeUtc(path) > youngCutoff)
+                // Packs never carry per-tile timestamps — one constantly-appended file holds thousands of tiles of
+                // mixed ages — so the grace rule cannot be applied tile by tile. The walk still needs a cutoff for
+                // packs, though: a freshly written pack on a live session may hold tiles the flusher has not named
+                // in a manifest yet, and collecting them now would delete tiles that are about to be referenced.
+                // The pack's own mtime is the only clock available, and it answers conservatively: a live session
+                // appends constantly, so its pack is always young and always skipped; only a sealed, untouched pack
+                // is old enough to judge, and there every unreferenced tile in it is genuinely orphaned. Retention
+                // aging in the test backdates that mtime past the cutoff.
+                DateTime lastWrite = File.GetLastWriteTimeUtc(path);
+                if (lastWrite > youngCutoff)
                 {
                     continue; // too fresh to judge: a live session may still be writing its manifest
                 }
 
-                File.Delete(path);
+                // Delete by hash, not by path: a packed tile's bytes live inside a shared pack, and removing the
+                // record from the index is what makes it unreachable. The pack itself is reclaimed whole later by
+                // ReclaimEmptyPacks once its last live tile goes (no compaction — see AssetPackStore).
+                if (!assets.Delete(hash))
+                {
+                    continue;
+                }
+
                 deleted++;
                 bytes += size;
             }
@@ -57,7 +73,17 @@ public sealed partial class RetentionPruner
             }
         }
 
-        return (deleted, bytes);
+        int packsDeleted = 0;
+        long packBytes = 0;
+        try
+        {
+            (packsDeleted, packBytes) = assets.ReclaimEmptyPacks();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+        }
+
+        return (deleted, bytes + packBytes);
     }
 
     private static long ToSqlHash(ulong hash) => unchecked((long)(hash ^ HashBias));

@@ -14,6 +14,14 @@ public sealed class TrayHost : IDisposable
 
     private static readonly Color RecordingColor = Color.FromArgb(0x3F, 0xD1, 0x6B);
     private static readonly Color PausedColor = Color.FromArgb(0xFF, 0x9F, 0x45);
+
+    /// <summary>
+    /// Capture is running but deliberately recording nothing because no display can be duplicated (locked session,
+    /// secure desktop, a second instance). Deliberately *not* the recording colour: a green light while nothing is
+    /// being recorded is exactly the silent failure spec 14 forbids.
+    /// </summary>
+    private static readonly Color IdleColor = Color.FromArgb(0xE8, 0x5D, 0x5D);
+
     private static readonly Color StoppedColor = Color.FromArgb(0x88, 0x8C, 0x98);
 
     private readonly CaptureClient _client;
@@ -26,9 +34,12 @@ public sealed class TrayHost : IDisposable
     // (and re-draw bitmaps) 43,000 times a day for a tool that is meant to run for weeks.
     private readonly Icon _recordingIcon;
     private readonly Icon _pausedIcon;
+    private readonly Icon _idleIcon;
     private readonly Icon _stoppedIcon;
     private bool _paused;
     private bool _serviceRunning;
+    private bool _blocked;
+    private bool _notifiedBlocked;
     private Color _shownColor;
     private string? _shownText;
 
@@ -40,6 +51,7 @@ public sealed class TrayHost : IDisposable
 
         _recordingIcon = CreateIcon(RecordingColor);
         _pausedIcon = CreateIcon(PausedColor);
+        _idleIcon = CreateIcon(IdleColor);
         _stoppedIcon = CreateIcon(StoppedColor);
 
         _icon = new NotifyIcon
@@ -99,9 +111,11 @@ public sealed class TrayHost : IDisposable
         CaptureStatus? status = _client.GetStatus();
         _serviceRunning = status is not null;
         _paused = status?.Paused ?? false;
+        _blocked = status?.IsWaitingForOutput ?? false;
 
         Color color = !_serviceRunning ? StoppedColor
             : _paused ? PausedColor
+            : _blocked ? IdleColor
             : RecordingColor;
 
         // Touching the shell on every tick is wasted work (and can make the tooltip flicker): only
@@ -111,6 +125,7 @@ public sealed class TrayHost : IDisposable
             _shownColor = color;
             _icon.Icon = color == StoppedColor ? _stoppedIcon
                 : color == PausedColor ? _pausedIcon
+                : color == IdleColor ? _idleIcon
                 : _recordingIcon;
         }
 
@@ -118,11 +133,30 @@ public sealed class TrayHost : IDisposable
             ? "Screen Recall — capture service not running"
             : _paused
                 ? "Screen Recall — paused"
-                : $"Screen Recall — recording ({status!.TilesStored} tiles stored today)";
+                : _blocked
+                    ? "Screen Recall — not recording: no capturable output"
+                    : $"Screen Recall — recording ({status!.TilesStored} tiles stored today)";
         if (text != _shownText)
         {
             _shownText = text;
             _icon.Text = text;
+        }
+
+        // Say it out loud once when capture stops being possible: on a locked workstation nothing else about the
+        // service looks different, and the whole point is that a recorder which is not recording says so (spec 14).
+        if (_blocked && !_notifiedBlocked)
+        {
+            _notifiedBlocked = true;
+            _icon.ShowBalloonTip(
+                5000,
+                "Screen Recall — capture is idle",
+                $"No capturable output: {status!.UnavailableDetail}. Nothing is being recorded. "
+                + $"The service keeps retrying every {(int)Math.Max(1, status.RetryInSeconds)}s.",
+                ToolTipIcon.Warning);
+        }
+        else if (!_blocked)
+        {
+            _notifiedBlocked = false;
         }
     }
 
@@ -138,6 +172,7 @@ public sealed class TrayHost : IDisposable
         _icon.Dispose();
         _recordingIcon.Dispose();
         _pausedIcon.Dispose();
+        _idleIcon.Dispose();
         _stoppedIcon.Dispose();
     }
 

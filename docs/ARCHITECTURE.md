@@ -73,9 +73,31 @@ bounded queue, which gives natural backpressure, and `FlushSessionState` drains 
 log, so a log entry can never become durable before the tile it references. That ordering makes the store
 crash-consistent at every flush boundary.
 
-**Log entries are written only for real changes.** Together with checkpoints this is the biggest lever on
-size: a static screen costs nothing (DXGI reports no presents), and a moving window costs only the tiles
-that actually changed.
+**No frame is ever substituted.** When DXGI cannot produce a session — locked workstation, UAC prompt, disconnected
+Remote Desktop session, an unduplicatable desktop mode, a second instance already capturing, a genuine driver fault —
+the capture backend reports the classified reason (`RecoveringDxgiSource`, `DxgiStatus`) and the engine idles at its
+backoff interval, retrying every 5–60 seconds. The dashboard and tray show that state explicitly (`no-output`, red
+icon, one warning balloon) rather than a green light. Recording injected frames is something the service can never
+do on its own: the synthetic desktop requires `--synthetic-test`. This is also the largest CPU line item we have
+measured (see `docs/PERFORMANCE.md` §4), because a 60 Hz timer-driven desktop costs ~18% of a four-core machine —
+which is what the old silent fallback was doing every time a laptop lid closed.
+
+**Only changed rows ever leave the GPU.** Frames are copied from the staging surface region by region: the rect list
+is read *before* the pixels, snapped outward to tile boundaries (`ReadbackRegions`), and only those rows are
+marshalled into the packed CPU buffer. The GPU-side blit deliberately stays whole-surface (one driver call; GPU is
+the budget the spec allows to spend), and pending full rescans, scaled surfaces and untrustworthy geometry fall back
+to a full copy — because hashing a tile assembled from two frames would be logged as current content.
+
+**The loop paces itself, not just its acquire timeout.** While the compositor presents back-to-back, widening the
+acquire timeout changes nothing (the frame is always ready), so `AdaptiveCadence.NextDelay` inserts a real pause
+after each frame with changes: a duty cycle that holds 6-ms frames to ~13 per second and sub-millisecond frames to
+hundreds, bounded at 250 ms (`RecallConfig.MaxPaceMs`, floor of ~4 frames/s) and visible in the status payload as
+`PaceIntervalMs`/`FramesPaced`.
+
+**Drains block on a signal, not a spin.** The asset writer signals an event when the queue empties, and the capture
+loop's two-second flush *defers* past 512 queued payloads rather than stalling on them; control paths (pause, purge,
+prune, rollover, shutdown) always wait, because they act on what the log says. The ordering rule is unchanged: a log
+entry never becomes durable before the tile it references.
 
 **Cursor and DRM handling is explicit.** Pointer updates arrive as metadata, never as dirty rects, so a
 pointer-only frame is skipped. A present with no rect list at all triggers a full-surface rescan that is

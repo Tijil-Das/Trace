@@ -50,9 +50,13 @@ public sealed partial class SessionReplayer
         return null;
     }
 
-    private void ApplyGeometry()
+    private void ApplyGeometry(long timestampMs = 0)
     {
-        foreach (MonitorInfo monitor in Store.Meta.AllMonitors())
+        IReadOnlyList<MonitorInfo> monitors = timestampMs > 0
+            ? Store.Meta.MonitorsAt(timestampMs)
+            : Array.Empty<MonitorInfo>();
+
+        foreach (MonitorInfo monitor in monitors.Count > 0 ? monitors : Store.Meta.AllMonitors())
         {
             Canvas.SetMonitor(monitor);
         }

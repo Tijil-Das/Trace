@@ -19,6 +19,7 @@ internal static class SoakCommand
 {
     internal static int Run(RecallConfig config, CommandLine commandLine)
     {
+        BuildConfiguration.WarnIfNotOptimized("the long-run CPU and memory figures");
         RecallConfig effective = config.Clone().Normalize();
         if (commandLine.RootOverride is null && !commandLine.Synthetic && !commandLine.ConfigExplicit)
         {

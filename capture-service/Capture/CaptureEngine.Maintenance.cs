@@ -40,7 +40,7 @@ internal sealed partial class CaptureEngine
         if (nowUs - _lastFlushUs >= 2_000_000)
         {
             _lastFlushUs = nowUs;
-            FlushSessionState();
+            FlushSessionState(deferIfBusy: true);
         }
 
         long nowMs = nowUs / 1000;

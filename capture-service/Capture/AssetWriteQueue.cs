@@ -16,6 +16,33 @@ internal sealed class AssetWriteQueue : IDisposable
     private readonly Thread _worker;
     private readonly CancellationTokenSource _cts = new();
     private readonly AssetStore _store;
+
+    /// <summary>
+    /// Signalled when nothing is queued. Drain waits on this instead of polling: a flush used to spin on
+    /// <c>Thread.Sleep(1)</c> for as long as the writer was behind, which on a saturated store was seconds of a
+    /// core doing nothing but checking a counter.
+    ///
+    /// A kernel event rather than <c>ManualResetEventSlim</c>, and that is a measured choice too: the slim
+    /// construct **spin-waits before it blocks**, and the drain loop calls it repeatedly, so every re-check paid
+    /// the spin again. A 30 s <c>dotnet-trace</c> put <c>ManualResetEventSlim.Wait</c> + <c>SpinWait.SpinOnceCore</c>
+    /// at 21% of capture-thread samples while the thread was doing no work at all
+    /// (<c>docs/PERFORMANCE.md</c> §5a). <c>ManualResetEvent.WaitOne</c> goes straight to the kernel: no spin, and
+    /// it wakes on <c>Set</c> immediately rather than at the end of a poll slice.
+    ///
+    /// HISTORY — do not re-litigate without the numbers below. This was reverted once when the fidelity suite
+    /// started failing, then re-landed when the numbers exonerated it: with the slim wait, same binary class,
+    /// the isolated fidelity test went 96.5% → 39.3% across two consecutive runs, and 96.5% → 0% before that;
+    /// the runs differ only in machine load, not in which event was compiled in. Whatever is flaking in the
+    /// fidelity path, it is above this layer (see the Clone/pacing note in RecallConfigTests). If this is ever
+    /// doubted again, the decisive experiment is five back-to-back isolated fidelity runs on a quiet machine —
+    /// a single failure proves a race, and its percentage points at *where*: 0% is empty frames (nothing
+    /// written), ~40-80% is torn frames (the writer lost the ordering race), and only a stable intermediate
+    /// number would implicate the wait itself.
+    /// </summary>
+    private readonly ManualResetEvent _idle = new(true);
+
+    /// <summary>Upper bound on one wait, so a missed signal can delay a drain but can never hang it.</summary>
+    private const int WaitSliceMs = 250;
     private long _written;
     private long _deduped;
     private long _bytes;
@@ -47,6 +74,9 @@ internal sealed class AssetWriteQueue : IDisposable
     /// <summary>Payloads handed to the writer but not yet written to disk.</summary>
     internal long PendingCount => Interlocked.Read(ref _pending);
 
+    /// <summary>Queue capacity. Also the ceiling the flush policy measures a backlog against.</summary>
+    internal int Capacity => _queue.BoundedCapacity;
+
     /// <summary>Most recent write error, if any.</summary>
     internal string? LastError { get; private set; }
 
@@ -59,6 +89,7 @@ internal sealed class AssetWriteQueue : IDisposable
         }
 
         Interlocked.Increment(ref _pending);
+        _idle.Reset();
         _queue.Add(new WriteRequest(hash, codecId, width, height, payload));
     }
 
@@ -67,21 +98,36 @@ internal sealed class AssetWriteQueue : IDisposable
     /// reference log use this first: a log entry must never become durable before the tile it points
     /// at, which is what keeps the store crash-consistent.
     /// </summary>
-    internal void Drain()
-    {
-        while (Interlocked.Read(ref _pending) > 0)
-        {
-            Thread.Sleep(1);
-        }
-    }
+    internal void Drain() => WaitForEmpty(TimeSpan.MaxValue);
 
     /// <summary>Drains with a bound, for callers that must not block indefinitely (shutdown paths).</summary>
-    internal bool TryDrain(TimeSpan timeout)
+    internal bool TryDrain(TimeSpan timeout) => WaitForEmpty(timeout);
+
+    /// <summary>
+    /// Waits for the queue to empty by blocking on the writer's signal rather than polling it, re-checking the
+    /// count after every wake so a signal that arrives early (an enqueue racing the last write) cannot end the wait
+    /// while work is still outstanding.
+    /// </summary>
+    private bool WaitForEmpty(TimeSpan timeout)
     {
-        DateTime deadline = DateTime.UtcNow + timeout;
-        while (Interlocked.Read(ref _pending) > 0 && DateTime.UtcNow < deadline)
+        bool bounded = timeout != TimeSpan.MaxValue;
+        DateTime deadline = bounded ? DateTime.UtcNow + timeout : DateTime.MaxValue;
+
+        while (Interlocked.Read(ref _pending) > 0)
         {
-            Thread.Sleep(2);
+            if (bounded && DateTime.UtcNow >= deadline)
+            {
+                break;
+            }
+
+            TimeSpan remaining = bounded ? deadline - DateTime.UtcNow : TimeSpan.MaxValue;
+            int slice = remaining == TimeSpan.MaxValue || remaining.TotalMilliseconds > WaitSliceMs
+                ? WaitSliceMs
+                : Math.Max(1, (int)remaining.TotalMilliseconds);
+
+            // WaitOne, not a poll: the writer Sets this event the moment the count reaches zero, so a healthy
+            // drain wakes in microseconds. A missed Set still ends the wait at the slice.
+            _idle.WaitOne(slice);
         }
 
         return Interlocked.Read(ref _pending) == 0;
@@ -105,6 +151,7 @@ internal sealed class AssetWriteQueue : IDisposable
             LastError = ex.Message;
         }
 
+        _idle.Set(); // release anything waiting for the queue to empty; it will find the writer stopped
         _cts.Dispose();
 
         // The queue is only disposed once its consumer has actually stopped: disposing it underneath a
@@ -113,6 +160,7 @@ internal sealed class AssetWriteQueue : IDisposable
         if (!_worker.IsAlive)
         {
             _queue.Dispose();
+            _idle.Dispose();
         }
     }
 
@@ -140,7 +188,11 @@ internal sealed class AssetWriteQueue : IDisposable
                 }
                 finally
                 {
-                    Interlocked.Decrement(ref _pending);
+                    if (Interlocked.Decrement(ref _pending) <= 0)
+                    {
+                        // Wake every drain: the queue is empty now, which is the only thing they wait for.
+                        _idle.Set();
+                    }
                 }
             }
         }

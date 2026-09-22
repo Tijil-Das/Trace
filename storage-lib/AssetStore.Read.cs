@@ -7,6 +7,11 @@ public sealed partial class AssetStore
     /// <summary>Reads just the header of an asset.</summary>
     public bool TryReadInfo(ulong hash, out AssetInfo info)
     {
+        if (_packs.TryReadInfo(hash, out info))
+        {
+            return true;
+        }
+
         info = new AssetInfo(hash, 0, 0, 0, 0);
         using FileStream? stream = OpenRead(PathFor(hash));
         if (stream is null)
@@ -18,9 +23,14 @@ public sealed partial class AssetStore
         return ReadHeader(stream, header, hash, out info);
     }
 
-    /// <summary>Reads the payload bytes of an asset.</summary>
+    /// <summary>Reads the payload bytes of an asset, from a pack when it is packed.</summary>
     public byte[] ReadPayload(ulong hash, out byte codecId, out int width, out int height)
     {
+        if (_packs.TryReadPayload(hash, out codecId, out width, out height, out byte[] packed))
+        {
+            return packed;
+        }
+
         string path = PathFor(hash);
         using FileStream stream = OpenRead(path)
             ?? throw new FileNotFoundException($"Asset {TileHash.ToHex(hash)} not found.", path);

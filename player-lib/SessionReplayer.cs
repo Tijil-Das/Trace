@@ -76,12 +76,21 @@ public sealed partial class SessionReplayer : IDisposable
         long? checkpointUs = FindCheckpointAtOrBefore(timestampUs);
 
         Canvas.Reset();
-        ApplyGeometry();
+        ApplyGeometry(timestampUs / 1000);
 
         long startFrom = 0;
         if (checkpointUs is not null)
         {
             Canvas.Load(LoadCheckpoint(checkpointUs.Value));
+
+            // A checkpoint carries whatever geometry the recorder that wrote it had. When that disagrees with the
+            // geometry in force at this timestamp - a session that saw a fallback source, a mode change, a
+            // re-plugged monitor - the checkpoint's grid must not win: adopting it would replay every following
+            // entry on the wrong grid, which is precisely how a real 1366x768 desktop came to render as stripes on
+            // a 1024x768 canvas. Re-asserting the active geometry drops the tiles that do not fit and lets the
+            // replay rebuild from the log.
+            ApplyGeometry(timestampUs / 1000);
+
             startFrom = checkpointUs.Value;
             LastCheckpointUs = checkpointUs.Value;
         }
@@ -148,10 +157,30 @@ public sealed partial class SessionReplayer : IDisposable
 
     private void Apply(in LogEntry entry)
     {
+        SyncGeometry(entry);
         Canvas.Apply(entry);
         PositionUs = entry.TimestampUs;
         EntriesApplied++;
         Consume();
+    }
+
+    /// <summary>
+    /// Puts the canvas on the geometry in force when an entry was recorded, if it is not already there.
+    ///
+    /// A session may hold two geometries for one monitor id — the fallback source had its own desktop size, a mode
+    /// change resizes the screen, a monitor is re-plugged into the same slot — and tile (x, y) means different
+    /// pixels under each grid. Applying an entry under the other one is what turned a real desktop into stripes.
+    /// The meta row in force is resolved per entry (not cached by window) because a re-sighted row's window can
+    /// cover a foreign window inside it; SetMonitor itself is cheap when the geometry is unchanged.
+    /// </summary>
+    private void SyncGeometry(in LogEntry entry)
+    {
+        if (Store.Meta.MonitorAt(entry.MonitorId, entry.TimestampUs / 1000) is not { } meta)
+        {
+            return;
+        }
+
+        Canvas.SetMonitor(meta.ToMonitorInfo());
     }
 
     /// <summary>Closes the log segments this replayer holds open.</summary>

@@ -111,4 +111,10 @@ internal sealed class DuplicationLostException : Exception
         : base(message)
     {
     }
+
+    /// <summary>
+    /// Classified cause, when the throwing site knew it. ACCESS_LOST is routine - a desktop switch or a mode
+    /// change - and is handled quietly, while a device error is not (spec 5.1 / 13).
+    /// </summary>
+    internal DxgiStatus.UnavailableReason Reason { get; init; }
 }

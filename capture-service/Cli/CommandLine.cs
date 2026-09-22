@@ -15,8 +15,6 @@ internal sealed class CommandLine
     /// <summary>Interval between synthetic frames, in milliseconds (default 16).</summary>
     internal int SyntheticIntervalMs { get; private set; } = 16;
 
-    internal bool SyntheticFallback { get; private set; }
-
     internal bool Probe { get; private set; }
 
     internal bool Bench { get; private set; }
@@ -35,6 +33,18 @@ internal sealed class CommandLine
     /// <summary>Seconds between soak samples.</summary>
     internal int SoakIntervalSeconds { get; private set; } = 60;
 
+    /// <summary>Minutes per phase for the spec 3 CPU budget bench (0 = not requested).</summary>
+    internal double CpuBenchMinutes { get; private set; }
+
+    /// <summary>Scripted workload for the bench's active phase, or "none" to measure manual use.</summary>
+    internal string? CpuBenchActivity { get; private set; }
+
+    /// <summary>
+    /// Turn on the per-tile phase split (hash/encode/store/log) for a bench run. Off by default because it costs
+    /// real CPU (23% of capture-thread samples in the §5a trace); a default run measures what production runs.
+    /// </summary>
+    internal bool DetailedTiming { get; private set; }
+
     internal string ConfigPath { get; private set; } = RecallConfig.DefaultConfigPath();
 
     /// <summary>True when the user named a config file explicitly (so its storage path is honoured).</summary>
@@ -46,7 +56,7 @@ internal sealed class CommandLine
 
     internal static CommandLine Parse(string[] args)
     {
-        CommandLine result = new() { Raw = args, SyntheticFallback = true };
+        CommandLine result = new() { Raw = args };
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -58,6 +68,9 @@ internal sealed class CommandLine
                     result.Console = true;
                     break;
                 case "--synthetic":
+                case "--synthetic-test":
+                    // Test-only, and only ever when asked for by name: the service must never turn a display it
+                    // cannot duplicate into a recording of injected frames (spec 5.1 / 13).
                     result.Synthetic = true;
                     break;
                 case "--synthetic-size":
@@ -76,7 +89,8 @@ internal sealed class CommandLine
 
                     break;
                 case "--no-fallback":
-                    result.SyntheticFallback = false;
+                    // Retired: falling back to the synthetic source at all is gone, so there is nothing left to
+                    // switch off. Accepted (and ignored) so existing scripts keep working.
                     break;
                 case "--probe":
                     result.Probe = true;
@@ -121,6 +135,27 @@ internal sealed class CommandLine
                         i++;
                     }
 
+                    break;
+                case "--cpu-bench":
+                    result.CpuBenchMinutes = 5;
+                    if (i + 1 < args.Length && double.TryParse(args[i + 1], out double benchMinutes))
+                    {
+                        // Fractional minutes are allowed on purpose: a sub-minute run is how the harness
+                        // itself gets smoke-tested without waiting ten minutes for a verdict.
+                        result.CpuBenchMinutes = Math.Clamp(benchMinutes, 5.0 / 60.0, 60);
+                        i++;
+                    }
+
+                    break;
+                case "--activity":
+                    if (i + 1 < args.Length)
+                    {
+                        result.CpuBenchActivity = args[++i];
+                    }
+
+                    break;
+                case "--detailed-timing":
+                    result.DetailedTiming = true;
                     break;
                 case "--config":
                     if (i + 1 < args.Length)
@@ -174,14 +209,29 @@ internal sealed class CommandLine
                                size every interval, then print a verdict (default 60 minutes).
               --soak-interval <sec>
                                Sampling interval for --soak (default 60).
-              --synthetic      Use the built-in synthetic desktop instead of DXGI duplication.
+              --synthetic-test
+                               Use the built-in synthetic desktop instead of DXGI duplication. Test and
+                               validation only: it records injected frames, not the screen, and it is never
+                               selected automatically. When no display can be duplicated the service goes idle
+                               and reports that state instead of recording anything.
+              --synthetic      Older name for --synthetic-test.
               --synthetic-size WxH
                                Synthetic desktop size (default 1024x768).
               --synthetic-interval <ms>
                                Interval between synthetic frames (default 16).
-              --no-fallback    Do not silently fall back to the synthetic source when DXGI fails.
               --probe          Enumerate adapters, outputs and monitors, then exit.
               --bench [tiles]  Time tile hashing, QOI encoding, store writes and log appends, then exit.
+              --cpu-bench [min]
+                               Run the spec 3 CPU budget check: [min] minutes with a static screen plus
+                               [min] minutes of active use (default 5 each, fractional allowed), then print
+                               a per-metric verdict and one result line. Release builds only.
+              --activity <path>
+                               Scripted workload window for the cpu-bench active phase; pass "none" to
+                               measure manual use instead. Defaults to dev-data\screen-activity.ps1.
+              --detailed-timing
+                               cpu-bench only: measure the per-tile phase split (hash/encode/store/log).
+                               Off by default because it costs real CPU, so a default run measures what
+                               production runs. Use it to find out where a frame went, not for a budget.
               --service-commands
                                Print the sc.exe commands that install/remove the service.
               --config <path>  Configuration file to use.

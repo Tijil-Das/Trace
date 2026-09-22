@@ -45,12 +45,18 @@ public partial class SettingsPanel : System.Windows.Controls.UserControl
 
         ServiceStateText.Text =
             $"{status.State.ToUpperInvariant()}   source {status.Source}   monitors {status.Monitors}   day {status.Day}\n"
+            + (status.IsWaitingForOutput
+                ? $"capture paused — no capturable output: {status.UnavailableDetail}. Nothing is being recorded; "
+                  + $"retrying every {(int)Math.Max(1, status.RetryInSeconds)}s.\n"
+                : string.Empty)
             + $"foreground: {status.ForegroundApp ?? "-"}{(status.Excluded ? "   (excluded — not recorded)" : string.Empty)}";
 
         ResourceText.Text =
             $"cpu {status.CpuPercent:0.00}%   mem {status.WorkingSetMb:0} MB   queue {status.AssetQueueDepth}\n"
-            + $"frames {status.FramesAcquired} ({status.FramesWithChanges} changed)   frame cost {status.AverageProcessMs:0.0} ms\n"
+            + $"frames {status.FramesAcquired} ({status.FramesWithChanges} changed)   frame cost {status.AverageProcessMs:0.0} ms   "
+            + $"pace {status.PaceIntervalMs:0} ms ({status.FramesPaced} paced)\n"
             + $"tiles hashed {status.TilesHashed}   stored {status.TilesStored}   deduped {status.TilesDeduped} ({status.DedupePercent:0.0}%)\n"
+            + $"dedupe cache {status.DedupeCacheEntries} hash(es), {status.DedupeCacheHitPercent:0.0}% answered from memory\n"
             + $"log entries {status.LogEntries}   session {status.SessionBytes / 1024.0:0} KB\n"
             + $"store {status.AssetCountOnDisk} assets / {status.AssetBytesOnDisk / 1024.0 / 1024.0:0.00} MB   free {status.FreeDiskGb:0.0} GB\n"
             + $"rects last frame {status.LastDirtyRects} dirty / {status.LastMoveRects} move   throttle {status.ThrottleLevel}";

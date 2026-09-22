@@ -105,9 +105,11 @@ dotnet --version   # 8.0.425
 | Unit + integration suite (44 tests) | `dotnet test tests\ScreenRecall.Tests\ScreenRecall.Tests.csproj -c Release` | `Passed! - Failed: 0, Passed: 44` in 1–2 minutes; every test uses its own throwaway store under `%TEMP%` |
 | Hardware check | `dotnet run --project capture-service -c Release -- --probe` | each output and monitor listed, `duplication : ok`, 60 acquired frames |
 | Quick record + replay | `dotnet run --project capture-service -c Release -- --once 20 --root .\dev-data\demo`, then `dotnet run --project player-cli -c Release -- list .\dev-data\demo` | the capture summary table, then the day listed with log span, store size and checkpoints |
-| Same, with no display | add `--synthetic` to `--once` | identical pipeline on a software desktop |
+| Same, with no display | add `--synthetic-test` to `--once` | identical pipeline on a software desktop (test-only: it records injected frames) |
 | Hot-path budgets | `dotnet run --project capture-service -c Release -- --bench 2000` | microseconds per tile hash/encode, milliseconds per store write, microseconds per log append |
 | Long-run check | `dotnet run --project capture-service -c Release -- --soak 30 --soak-interval 30 --root .\dev-data\soak` | per-interval samples, then a per-metric verdict (`[ ok ]` / `[ !! ]`); `--soak 1440` is the spec's 24-hour version |
+| CPU budget (spec §3) | `Trace.cmd bench 5` | a verdict per metric, then one `cpu-bench result:` line to record; exit 0 within budget, 1 over, 2 invalid measurement |
+| Lost capture (locked session, 2nd instance) | the service goes idle, the tray turns red, and the dashboard says so | no silent anything: check `state` over IPC (`recording` / `paused` / `no-output`) |
 | End-to-end fidelity | see *Fidelity harness* below | pixel match 100.0000% |
 
 Two things worth knowing when reading the output:
@@ -142,4 +144,6 @@ Result on this machine: *11 frames checked, 11 exact, pixel match 100.0000%*.
 - [`docs/STORAGE-FORMAT.md`](docs/STORAGE-FORMAT.md) — byte-level formats for the log, assets,
   checkpoints, manifests and ground-truth dumps.
 - [`docs/VALIDATION.md`](docs/VALIDATION.md) — measurements, harnesses, and how to reproduce them.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — the CPU budget from spec §3: how it's measured, the definition
+  of done for capture-loop changes, and the design decisions that currently put it at risk.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — what is done, what is deliberately deferred, and the known gaps.

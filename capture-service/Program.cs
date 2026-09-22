@@ -54,6 +54,11 @@ internal static class Program
             return SoakCommand.Run(config, commandLine);
         }
 
+        if (commandLine.CpuBenchMinutes > 0)
+        {
+            return CpuBenchCommand.Run(config, commandLine);
+        }
+
         return RunHost(args, config, commandLine);
     }
 

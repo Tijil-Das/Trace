@@ -61,6 +61,59 @@ public sealed class PlaybackTests : IDisposable
     }
 
     [Fact]
+    public void ReplayUsesTheGeometryInForceWhenEachEntryWasRecorded()
+    {
+        // The corruption this guards against: a store can hold two geometries for one monitor id (a fallback source
+        // with its own desktop size, a mode change, a re-plugged monitor) and the reader used to seed the canvas
+        // from whichever row sat last in meta.json. Every entry from the other window was then indexed on the wrong
+        // grid - a 1366-wide desktop laid out on a 1024-wide grid renders as repeating stripes, which is exactly
+        // what a real session did until this was fixed.
+        const long twentySeconds = 20_000_000;
+        SessionStore store = SessionStore.Open(_root, Day, 64);
+        MonitorInfo wide = new(0, "wide", 0, 0, 256, 64, 64);     // 4 columns of 64px
+        MonitorInfo narrow = new(0, "narrow", 0, 0, 128, 64, 64); // 2 columns
+        DateTimeOffset start = BaseTime;
+        store.UpdateMonitors(new[] { wide }, start);
+        store.UpdateMonitors(new[] { narrow }, start.AddSeconds(10));
+        // Sighted again while it is in force, the way a recorder that is actually running reports its display: the
+        // foreign geometry owns 10s..25s, and the real display takes over from 30s.
+        store.UpdateMonitors(new[] { narrow }, start.AddSeconds(25));
+        store.UpdateMonitors(new[] { wide }, start.AddSeconds(30));
+
+        (ulong wideHash, int wideWidth, int wideHeight, byte[] widePixels) = AssetStoreTests.MakeTile(3);
+        (ulong narrowHash, int narrowWidth, int narrowHeight, byte[] narrowPixels) = AssetStoreTests.MakeTile(7);
+        store.Assets.Store(wideHash, QoiTileCodec.Instance.Id, wideWidth, wideHeight, QoiTileCodec.Instance.Encode(widePixels, wideWidth, wideHeight));
+        store.Assets.Store(narrowHash, QoiTileCodec.Instance.Id, narrowWidth, narrowHeight, QoiTileCodec.Instance.Encode(narrowPixels, narrowWidth, narrowHeight));
+
+        using (SessionLogWriter writer = store.OpenLog(start))
+        {
+            // Column 3 exists only on the wide grid; column 1 exists on both but means different pixels.
+            writer.Append(LogEntry.Draw(At(0), 1u, 0, 3, 0, wideHash));
+            writer.Append(LogEntry.Draw(At(twentySeconds), 1u, 0, 1, 0, narrowHash));
+            writer.Append(LogEntry.Draw(At(40_000_000), 1u, 0, 3, 0, wideHash));
+        }
+
+        using SessionReplayer replayer = new(_root, Day);
+
+        // Seeded from the geometry in force after the foreign window, i.e. the one still being recorded.
+        Assert.Equal(4, replayer.Canvas.Monitor(0)!.Columns);
+
+        replayer.SeekTo(At(0));
+        Assert.Equal(4, replayer.Canvas.Monitor(0)!.Columns);
+        Assert.Equal(wideHash, replayer.Canvas.TileAt(0, 3, 0));
+
+        // Inside the foreign window the canvas has to switch grids, or those entries land on the wrong tiles.
+        replayer.AdvanceTo(At(twentySeconds));
+        Assert.Equal(2, replayer.Canvas.Monitor(0)!.Columns);
+        Assert.Equal(narrowHash, replayer.Canvas.TileAt(0, 1, 0));
+
+        // ... and switch back afterwards.
+        replayer.AdvanceTo(At(40_000_000));
+        Assert.Equal(4, replayer.Canvas.Monitor(0)!.Columns);
+        Assert.Equal(wideHash, replayer.Canvas.TileAt(0, 3, 0));
+    }
+
+    [Fact]
     public void ForwardPlaybackNeverSeeks()
     {
         BuildSession();

@@ -115,7 +115,19 @@ internal sealed record StatusDto(
     double LastLogMs,
     long LogZeroRecordFaults,
     bool LogExternalWriterDetected,
-    int AssetQueueDepth);
+    int AssetQueueDepth,
+    double PaceIntervalMs,
+    long FramesPaced,
+    string? UnavailableReason,
+    string? UnavailableDetail,
+    double RetryInSeconds,
+    long DedupeCacheHits,
+    long DedupeCacheMisses,
+    int DedupeCacheEntries,
+    int LastEncodedTiles,
+    bool DetailedTiming,
+    double LastTileLoopMs,
+    int DedupeCacheSeeded);
 
 internal sealed record PruneReportDto(
     int DaysDeleted,

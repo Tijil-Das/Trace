@@ -69,6 +69,40 @@ public sealed class CaptureStatus
 
     public double AverageProcessMs { get; set; }
 
+    /// <summary>Pause the service is inserting between frames, in milliseconds (its CPU governor at work).</summary>
+    public double PaceIntervalMs { get; set; }
+
+    /// <summary>Frames the recorder deliberately waited after, to stay inside its CPU budget.</summary>
+    public long FramesPaced { get; set; }
+
+    /// <summary>Why capture is idle, when it is: the service cannot see a desktop to record (spec 13).</summary>
+    public string? UnavailableReason { get; set; }
+
+    /// <summary>Readable form of <see cref="UnavailableReason"/>, including the raw DXGI detail.</summary>
+    public string? UnavailableDetail { get; set; }
+
+    /// <summary>Seconds until the service tries to capture again.</summary>
+    public double RetryInSeconds { get; set; }
+
+    public long DedupeCacheHits { get; set; }
+
+    public long DedupeCacheMisses { get; set; }
+
+    public int DedupeCacheEntries { get; set; }
+
+    /// <summary>True when the recorder is deliberately recording nothing because no display can be duplicated.</summary>
+    public bool IsWaitingForOutput => UnavailableReason is not null;
+
+    /// <summary>Share of dedupe lookups answered from memory instead of probing the store on the capture thread.</summary>
+    public double DedupeCacheHitPercent
+    {
+        get
+        {
+            long lookups = DedupeCacheHits + DedupeCacheMisses;
+            return lookups == 0 ? 0 : 100.0 * DedupeCacheHits / lookups;
+        }
+    }
+
     public int LastDirtyRects { get; set; }
 
     public int LastMoveRects { get; set; }

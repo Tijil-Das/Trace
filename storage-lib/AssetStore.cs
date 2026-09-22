@@ -21,16 +21,26 @@ public sealed partial class AssetStore
     private readonly string _tempDir;
     private readonly HashSet<string> _knownDirectories = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Packed storage for everything written from now on. Legacy <c>&lt;hash&gt;.tile</c> files are still read, so a
+    /// store written by an earlier build keeps playing; nothing migrates them, they simply age out with retention.
+    /// </summary>
+    private readonly AssetPackStore _packs;
+
     public AssetStore(string assetsRoot)
     {
         Root = assetsRoot ?? throw new ArgumentNullException(nameof(assetsRoot));
         _tempDir = Path.Combine(Root, TempFolderName);
         Directory.CreateDirectory(Root);
         Directory.CreateDirectory(_tempDir);
+        _packs = new AssetPackStore(Root);
     }
 
     /// <summary>Root directory of the store.</summary>
     public string Root { get; }
+
+    /// <summary>Packed storage backing this store.</summary>
+    public AssetPackStore Packs => _packs;
 
     /// <summary>Number of new assets written through this instance.</summary>
     public long StoresThisInstance { get; private set; }
@@ -48,8 +58,21 @@ public sealed partial class AssetStore
         return Path.Combine(Root, hex[..2], hex.Substring(2, 2), hex + ".tile");
     }
 
-    /// <summary>Cheap existence probe used by the dedupe path.</summary>
-    public bool Contains(ulong hash) => File.Exists(PathFor(hash));
+    /// <summary>
+    /// Cheapest existence probe used by the dedupe path. The caller-supplied <paramref name="checkDisk"/> flag lets
+    /// short-lived instances (the retention merge walk, integrity checks, tests) see the durable state of the world:
+    /// memory-only answers lie to any instance that did not perform the writes or deletes itself.
+    /// </summary>
+    public bool Contains(ulong hash, bool checkDisk = false)
+    {
+        if (_packs.Contains(hash))
+        {
+            return true;
+        }
+
+        return checkDisk ? _packs.ContainsOnDisk(hash) || File.Exists(PathFor(hash))
+            : File.Exists(PathFor(hash));
+    }
 
     /// <summary>Records a dedupe hit in the live counters.</summary>
     public void NoteDedupeHit() => DedupeHitsThisInstance++;
@@ -60,10 +83,34 @@ public sealed partial class AssetStore
     /// <param name="width">Tile width in pixels.</param>
     /// <param name="height">Tile height in pixels.</param>
     /// <param name="payload">Encoded payload.</param>
-    /// <param name="assumeMissing">
-    /// Set by callers that already probed the store, skipping a redundant existence check on the hot path.
-    /// </param>
+    /// <param name="assumeMissing">Set by callers that already probed the store, skipping a redundant check.</param>
     public bool Store(
+        ulong hash,
+        byte codecId,
+        int width,
+        int height,
+        ReadOnlySpan<byte> payload,
+        bool assumeMissing = false)
+    {
+        // Packed append: one buffered sequential write plus a 32-byte index record, instead of a file per tile.
+        // No temp file and no rename is needed — the commit point is the index record, and a pack tail that never
+        // got one is unreachable garbage that startup reclaims. This is the whole point of spec §5.3's packed store.
+        if (_packs.Store(hash, codecId, width, height, payload, assumeMissing))
+        {
+            StoresThisInstance++;
+            BytesWrittenThisInstance += payload.Length + HeaderSize;
+            return true;
+        }
+
+        DedupeHitsThisInstance++;
+        return false;
+    }
+
+    /// <summary>
+    /// Legacy single-file write path, kept for the migration tests and for anyone who needs the old layout.
+    /// Not used by the capture loop.
+    /// </summary>
+    internal bool StoreAsFile(
         ulong hash,
         byte codecId,
         int width,
@@ -90,7 +137,13 @@ public sealed partial class AssetStore
 
         try
         {
-            using (FileStream stream = new(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 64 * 1024))
+            using (FileStream stream = new(
+                temp,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                64 * 1024,
+                FileOptions.SequentialScan))
             {
                 Span<byte> header = stackalloc byte[HeaderSize];
                 WriteHeader(header, hash, codecId, width, height, payload.Length);
@@ -123,17 +176,22 @@ public sealed partial class AssetStore
         }
     }
 
-    /// <summary>Deletes an asset. Returns true when a file was removed.</summary>
+    /// <summary>Upper bound on one encoded tile payload, used to size a batch scratch buffer.</summary>
+    public static int MaxPayloadNeeded(int payloadLength) => payloadLength;
+
+    /// <summary>Deletes an asset. Returns true when it was present, packed or legacy.</summary>
     public bool Delete(ulong hash)
     {
+        bool removed = _packs.Delete(hash);
+
         string path = PathFor(hash);
-        if (!File.Exists(path))
+        if (File.Exists(path))
         {
-            return false;
+            File.Delete(path);
+            removed = true;
         }
 
-        File.Delete(path);
-        return true;
+        return removed;
     }
 
     internal static void WriteHeader(Span<byte> destination, ulong hash, byte codecId, int width, int height, int payloadLength)

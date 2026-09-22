@@ -64,7 +64,9 @@ public sealed class SessionLogWriter : IDisposable
     {
         // Flush() is reachable from control paths (pause, purge, dispose) while the capture loop is
         // appending, so writer state is serialized: a torn buffer write here would put zero records
-        // into the middle of the log.
+        // into the middle of the log. Removing this lock was tried and reverted: the pixel-perfect
+        // fidelity test immediately dropped to 79% because an IPC-thread flush drained a
+        // half-filled buffer mid-append. The lock is load-bearing, not incidental.
         lock (_gate)
         {
             if (_disposed)

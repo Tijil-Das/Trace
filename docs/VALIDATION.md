@@ -4,6 +4,11 @@ Every number here was produced on the development machine: Windows 11 Pro x64 (b
 cores, 1366×768 display, .NET 8.0.425, Release builds, real-time malware scanning enabled. Anything marked
 "≈" is a single-sample measurement, not a benchmark suite.
 
+> **The CPU budget has its own page.** Spec §3's hard requirement (< 2% steady-state) is now enforced by
+> `Trace.cmd bench` / `--cpu-bench`, and [`PERFORMANCE.md`](PERFORMANCE.md) carries the definition of done for
+> capture-loop changes plus the design decisions that currently risk it. The numbers below were single samples
+> taken while building the design — §3 in particular is a 16-second `--once` run, not a budget check.
+
 ## 1. Fidelity — the number that matters
 
 Method: `captureGroundTruth: true` makes the capture service dump a full ground-truth frame (same timestamp)

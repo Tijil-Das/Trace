@@ -54,7 +54,8 @@ listed as missing.
   fought.
 - **Secure Desktop surfaces** (UAC, lock screen, Ctrl+Alt+Del) are un-capturable by any user-mode app by
   design, and this code does not attempt to work around that.
-- **Nested Remote Desktop sessions** may double-capture; not special-cased yet.
+- **Nested Remote Desktop sessions** that are connected capture normally; a *disconnected* session is reported as
+  idle (`SessionDisconnected`) rather than captured, and capture resumes automatically on reconnect.
 - **Hash collisions**: xxHash3 is non-cryptographic. A collision would mean a tile renders as other content
   that hashed the same; `verify --content` re-hashes stored tiles and reports such cases, and the store layout
   does not depend on collision resistance for correctness (only on it being rare).
@@ -71,6 +72,24 @@ listed as missing.
 
 - The hot path is `CaptureEngine.ProcessFrame` → `ProcessTiles`. Keep allocations out of it; `_cells`,
   `_tileScratch` and the canvas are reused on purpose.
+- **A capture-loop change is not done until its Release-build CPU has been measured.** Run `Trace.cmd bench 5`
+  and record the `cpu-bench result:` line. `docs/PERFORMANCE.md` §3 is the checklist and §4 is the list of
+  design decisions that currently risk the < 2% target (spec §3) — read §4 before touching the loop, not after.
+- The synthetic desktop is **test-only**: `--synthetic-test` is the only way to run it, and it is also aliased as
+  `--synthetic`. Nothing in the service ever selects it on its own. When no display can be duplicated the service
+  goes idle (`no-output`), retries on a backoff, and says so over IPC — the dashboard shows a red icon and a clear
+  sentence, not a green light. `docs/PERFORMANCE.md` §4 explains why this is also the biggest CPU line item.
+- **A session's `meta.json` can hold more than one geometry for one monitor id** (a mode change, a re-plug, or a
+  fallback source that reused id 0). Two rows mean two tile grids, and tile (x, y) is different pixels under each.
+  Anything that applies a log entry must resolve the row in force **at that entry's timestamp** via
+  `SessionMeta.MonitorAt`/`MonitorsAt`; `AllMonitors()` is only for "which geometries exist" questions (counts,
+  day summaries, seeding a canvas). Getting this wrong replayed a 689 MB session as repeating stripes — see
+  `docs/PERFORMANCE.md` §4.8.
+- **The tile encoder is not the CPU problem, and is not going to the GPU.** A 30 s `dotnet-trace` of a live DXGI
+  recording puts `QoiCodec.EncodeInto` at 2.3% of capture-thread samples against 23% for the per-tile phase
+  instrumentation and 13% for the dedupe probe's filesystem path. QOI's per-tile state machine is strictly
+  sequential, so a compute-shader port would be research-grade work for ~2%. `docs/PERFORMANCE.md` §5a has the
+  numbers, including why the archive codec must never become the capture codec (12× slower).
 - Never log an entry for a tile whose hash equals the canvas: that identity is what keeps both the log and the
   store small, and `PipelineTests` will catch it if the invariant breaks.
 - Never flush the log without draining `AssetWriteQueue` first — see the crash-consistency rule.

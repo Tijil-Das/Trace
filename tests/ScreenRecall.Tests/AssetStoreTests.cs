@@ -77,12 +77,17 @@ public sealed class AssetStoreTests : IDisposable
         (ulong hash, int width, int height, byte[] pixels) = MakeTile(5);
         store.Store(hash, QoiTileCodec.Instance.Id, width, height, QoiTileCodec.Instance.Encode(pixels, width, height));
 
-        // Overwrite the payload, keeping the header valid: only content verification can catch this.
-        string path = store.PathFor(hash);
-        using (FileStream stream = new(path, FileMode.Open, FileAccess.Write, FileShare.None))
+        foreach ((ulong packedHash, AssetPackStore.PackEntry entry) in store.Packs.Entries())
         {
-            stream.Seek(AssetStore.HeaderSize, SeekOrigin.Begin);
-            stream.Write(new byte[32]);
+            Assert.Equal(hash, packedHash);
+            // Overwrite the packed payload, keeping the header valid: only content verification can catch this.
+            // The store holds the pack open for reading, so the overwrite opens with a sharing mode that allows it.
+            string path = store.Packs.PathOf(entry.PackId);
+            using (FileStream stream = new(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite))
+            {
+                stream.Seek(entry.Offset + AssetStore.HeaderSize, SeekOrigin.Begin);
+                stream.Write(new byte[32]);
+            }
         }
 
         Assert.Throws<InvalidDataException>(() => store.TryLoadTile(hash, verifyHash: true));

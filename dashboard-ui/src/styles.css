@@ -239,11 +239,13 @@ textarea {
 
 .settings {
   height: 100%;
-  overflow: auto;
-  padding: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px 12px 32px;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 /* ----------------------------------------------------------------- panels */
@@ -252,10 +254,13 @@ textarea {
   background: var(--bg-panel);
   border: 1px solid var(--line-soft);
   border-radius: var(--radius);
-  padding: 10px;
+  padding: 12px;
   display: flex;
   flex-direction: column;
+  gap: 10px;
   min-height: 0;
+  flex: 0 0 auto;
+  overflow: hidden;
 }
 
 .panel--danger {
@@ -267,7 +272,7 @@ textarea {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .panel__title {
@@ -285,9 +290,10 @@ textarea {
 }
 
 .panel__note {
-  margin: 0 0 10px;
+  margin: 0;
   font-size: 12px;
   color: var(--text-faint);
+  max-width: 90ch;
 }
 
 .panel--days {
@@ -671,20 +677,33 @@ textarea {
 
 /* --------------------------------------------------------------- settings */
 
+.settings .panel {
+  flex: none;
+  min-width: 0;
+  width: 100%;
+}
+
 .stats {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 4px 14px;
-  margin: 0 0 10px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 4px 16px;
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  min-width: 0;
+  align-items: start;
 }
 
 .stat {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  column-gap: 12px;
   border-bottom: 1px dotted var(--line-soft);
-  padding: 3px 0;
+  padding: 4px 0;
+  margin: 0;
   font-size: 12.5px;
+  min-width: 0;
 }
 
 .stat--wide {
@@ -693,26 +712,38 @@ textarea {
 
 .stat__label {
   color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .stat__value {
   margin: 0;
+  padding: 0;
   font-family: var(--mono);
   font-size: 12px;
   text-align: right;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
 .grid2 {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px 16px;
+  align-items: start;
+  min-width: 0;
+  width: 100%;
 }
 
 .field {
@@ -725,6 +756,17 @@ textarea {
   flex-direction: row;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+.settings .form > .grid2 > .field {
+  min-width: 0;
+}
+
+.settings .form .input,
+.settings .input--area {
+  width: 100%;
+  max-width: 100%;
 }
 
 .field__label {
@@ -733,8 +775,14 @@ textarea {
 }
 
 .field__hint {
+  margin: 0;
   font-size: 11px;
   color: var(--text-faint);
+  line-height: 1.5;
+}
+
+p.field__hint {
+  margin: 0;
 }
 
 .input {
@@ -767,9 +815,15 @@ textarea {
 
 .check {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   font-size: 13px;
+  margin: 0;
+}
+
+.check input {
+  margin-top: 2px;
+  flex: 0 0 auto;
 }
 
 .check--disabled {
@@ -780,6 +834,12 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-top: 2px;
+}
+
+.settings .row--wrap {
+  position: static;
+  margin-top: 4px;
 }
 
 .row--wrap {

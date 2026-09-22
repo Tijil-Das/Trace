@@ -310,9 +310,9 @@ export function Settings() {
 
 function Stat({ label, value, wide }: { label: string; value: string; wide?: boolean }) {
   return (
-    <div className={`stat ${wide ? 'stat--wide' : ''}`}>
-      <dt className="stat__label">{label}</dt>
-      <dd className="stat__value">{value}</dd>
+    <div className={`stat ${wide ? 'stat--wide' : ''}`} title={`${label}: ${value}`}>
+      <dt className="stat__label" title={label}>{label}</dt>
+      <dd className="stat__value" title={value}>{value}</dd>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+using ScreenRecall.CaptureService.Capture;
 using ScreenRecall.Storage;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -19,6 +20,9 @@ internal sealed partial class DesktopDuplicator : IDisposable
     private StagingSurface? _staging;
     private bool _frameAcquired;
     private bool _disposed;
+
+    /// <summary>Reused region list for the partial readback: the steady-state path allocates nothing per frame.</summary>
+    private readonly List<IntRect> _readbackRegions = new(ReadbackRegions.MaxRegions);
     private int _lastPointerX = int.MinValue;
     private int _lastPointerY = int.MinValue;
     private bool _lastPointerVisible;
@@ -35,10 +39,10 @@ internal sealed partial class DesktopDuplicator : IDisposable
         _duplication = duplication;
     }
 
-    /// <summary>Creates a duplication session for an output, or null when it cannot be duplicated.</summary>
-    internal static DesktopDuplicator? TryCreate(DxgiOutputTarget target, out string? error)
+    /// <summary>Creates a duplication session for an output, or reports why not.</summary>
+    internal static DesktopDuplicator? TryCreate(DxgiOutputTarget target, out DxgiStatus.Failure failure)
     {
-        error = null;
+        failure = default;
         FeatureLevel[] levels =
         {
             FeatureLevel.Level_11_1,
@@ -47,18 +51,20 @@ internal sealed partial class DesktopDuplicator : IDisposable
             FeatureLevel.Level_10_0,
         };
 
-        if (D3D11.D3D11CreateDevice(
-                target.Adapter,
-                DriverType.Unknown,
-                DeviceCreationFlags.BgraSupport,
-                levels,
-                out ID3D11Device? device,
-                out FeatureLevel _,
-                out ID3D11DeviceContext? context).Failure
-            || device is null
-            || context is null)
+        SharpGen.Runtime.Result created = D3D11.D3D11CreateDevice(
+            target.Adapter,
+            DriverType.Unknown,
+            DeviceCreationFlags.BgraSupport,
+            levels,
+            out ID3D11Device? device,
+            out FeatureLevel _,
+            out ID3D11DeviceContext? context);
+
+        if (created.Failure || device is null || context is null)
         {
-            error = "D3D11CreateDevice failed";
+            failure = new DxgiStatus.Failure(
+                DxgiStatus.Classify(created),
+                $"D3D11CreateDevice failed: {created.Description}");
             device?.Dispose();
             context?.Dispose();
             return null;
@@ -70,17 +76,37 @@ internal sealed partial class DesktopDuplicator : IDisposable
             IDXGIOutputDuplication duplication = output1.DuplicateOutput(device);
             return new DesktopDuplicator(target, device, context, duplication);
         }
-        catch (Exception ex) when (ex is SharpGen.Runtime.SharpGenException or InvalidCastException)
+        catch (SharpGen.Runtime.SharpGenException ex)
         {
-            error = ex.Message;
-            context.Dispose();
-            device.Dispose();
-            return null;
+            // The HRESULT decides how the retry loop treats this: E_ACCESSDENIED means the desktop is not
+            // visible to us right now (locked, secure desktop, another session) and is expected, while a device
+            // or driver error is a genuine fault. Both are reported honestly, neither is faked (spec 13).
+            // SharpGenException carries the code in HResult rather than a Result property.
+            failure = new DxgiStatus.Failure(
+                DxgiStatus.Classify(ex.HResult),
+                $"{target.Monitor.DeviceName}: {ex.Message}");
         }
+        catch (InvalidCastException ex)
+        {
+            failure = new DxgiStatus.Failure(
+                DxgiStatus.UnavailableReason.Unknown,
+                $"{target.Monitor.DeviceName}: {ex.Message}");
+        }
+
+        context.Dispose();
+        device.Dispose();
+        return null;
     }
 
     /// <summary>Monitor this session captures.</summary>
     internal MonitorInfo Monitor => _target.Monitor;
+
+    /// <summary>
+    /// Set by the engine while a full-surface rescan is pending. A partial readback would leave every tile
+    /// outside the dirty rects holding pixels from an earlier frame, and those tiles are about to be hashed -
+    /// so a pending rescan is the one case where the whole surface has to be read.
+    /// </summary>
+    internal bool FullFrameRequired { get; set; }
 
     /// <summary>
     /// Waits up to <paramref name="timeout"/> for a frame. Returns null on timeout (nothing changed);
@@ -110,7 +136,10 @@ internal sealed partial class DesktopDuplicator : IDisposable
 
         if (result.Failure || desktopResource is null)
         {
-            throw new DuplicationLostException($"AcquireNextFrame failed: {result.Description}");
+            throw new DuplicationLostException($"AcquireNextFrame failed: {result.Description}")
+            {
+                Reason = DxgiStatus.Classify(result),
+            };
         }
 
         _frameAcquired = true;
@@ -124,16 +153,39 @@ internal sealed partial class DesktopDuplicator : IDisposable
 
         Texture2DDescription description = desktopTexture.Description;
         StagingSurface staging = EnsureStaging(description);
+
+        // Rect first, pixels second: the region list is what decides which pixels are needed at all, and
+        // reading it costs nothing. A frame whose regions cannot be trusted - a pending full rescan, a scaled
+        // surface, a dirty area covering most of the screen - falls back to the whole-surface copy.
+        FrameRects rects = FrameRectsReader.Read(_duplication);
+        bool partial = ReadbackRegions.TryPlan(
+            rects.DirtyRects,
+            rects.DirtyCount,
+            rects.MoveRects,
+            rects.MoveCount,
+            Monitor,
+            staging.Width,
+            staging.Height,
+            FullFrameRequired,
+            _readbackRegions);
+
         long readbackTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         _context.CopyResource(staging.Texture, desktopTexture);
         _context.Flush();
-        BufferMapper.CopyToPacked(
-            staging,
-            _context.Map(staging.Texture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None),
-            _context);
-        double readbackMs = System.Diagnostics.Stopwatch.GetElapsedTime(readbackTicks).TotalMilliseconds;
+        MappedSubresource mapped = _context.Map(staging.Texture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None);
+        if (partial)
+        {
+            // Only the rows DXGI reported are copied out of the mapped surface. The GPU copy above stays a single
+            // whole-surface blit on purpose: that is one driver call instead of one per region, and GPU bandwidth
+            // is the budget the spec explicitly allows to be spent (spec 3) while CPU is the one that is not.
+            BufferMapper.CopyRegionsToPacked(staging, mapped, _context, _readbackRegions);
+        }
+        else
+        {
+            BufferMapper.CopyToPacked(staging, mapped, _context);
+        }
 
-        FrameRects rects = FrameRectsReader.Read(_duplication);
+        double readbackMs = System.Diagnostics.Stopwatch.GetElapsedTime(readbackTicks).TotalMilliseconds;
 
         // Cursor movement and shape updates arrive as metadata, never as dirty rects. Tracking them
         // lets the engine distinguish "the compositor presented for the cursor only" from "something

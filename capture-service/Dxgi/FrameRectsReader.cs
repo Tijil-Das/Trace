@@ -1,3 +1,4 @@
+using ScreenRecall.CaptureService.Capture;
 using System.Runtime.InteropServices;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
@@ -24,6 +25,45 @@ internal static class BufferMapper
             for (int y = 0; y < staging.Height; y++)
             {
                 Marshal.Copy(IntPtr.Add(mapped.DataPointer, y * sourcePitch), staging.Buffer, y * rowBytes, rowBytes);
+            }
+        }
+        finally
+        {
+            context.Unmap(staging.Texture, 0);
+        }
+    }
+
+    /// <summary>
+    /// Copies only the planned regions out of a mapped staging surface into the packed buffer, then unmaps.
+    ///
+    /// The regions are already snapped to tile boundaries, so what lands in the buffer is whole tiles, and the
+    /// buffer keeps absolute addressing: pixels outside every region are left exactly as they were, which is
+    /// correct because no tile outside them is about to be hashed. That is where the saving comes from - a
+    /// one-corner change copies a few kilobytes instead of the whole framebuffer.
+    /// </summary>
+    internal static void CopyRegionsToPacked(
+        StagingSurface staging,
+        MappedSubresource mapped,
+        ID3D11DeviceContext context,
+        List<IntRect> regions)
+    {
+        try
+        {
+            int rowBytes = staging.Width * 4;
+            int sourcePitch = (int)mapped.RowPitch;
+
+            foreach (IntRect region in regions)
+            {
+                int bytes = region.Width * 4;
+                for (int row = 0; row < region.Height; row++)
+                {
+                    int targetRow = region.Y + row;
+                    Marshal.Copy(
+                        IntPtr.Add(mapped.DataPointer, (targetRow * sourcePitch) + (region.X * 4)),
+                        staging.Buffer,
+                        (targetRow * rowBytes) + (region.X * 4),
+                        bytes);
+                }
             }
         }
         finally

@@ -23,7 +23,8 @@ internal sealed partial class CaptureEngine
             _exclusions = new ExclusionMatcher(_config.ExcludedProcesses, _config.ExcludedTitlePatterns);
             _foreground = new ForegroundWindowTracker(_exclusions);
             _codec = TileCodecs.FromFidelityMode(_config.FidelityMode);
-            _cadence = new AdaptiveCadence(_config.IdlePollMs, _config.BurstPollMs);
+            _cadence = new AdaptiveCadence(_config.IdlePollMs, _config.BurstPollMs, maxPaceMs: _config.MaxPaceMs);
+            _detailedTiming = _config.DetailedTiming;
 
             if (fidelityChanged || tileSizeChanged || rootChanged || monitorFilterChanged)
             {
@@ -107,10 +108,22 @@ internal sealed partial class CaptureEngine
     /// budget expires the log is deliberately *not* flushed, so the entries and tiles of that interval stay
     /// atomic instead of leaving entries pointing at tiles that never reached disk.
     /// </param>
-    internal void FlushSessionState(TimeSpan? drainBudget = null)
+    /// <param name="deferIfBusy">
+    /// Set by the periodic flush from the capture loop, and only there. A deep backlog means the store cannot keep
+    /// up with what is being recorded, and waiting it out would stall capture for seconds; deferring the flush to
+    /// the next interval leaves the log buffered instead. Control paths (pause, purge, prune, day rollover, root
+    /// switch, shutdown) must not defer: they are about to act on what the log says.
+    /// </param>
+    internal void FlushSessionState(TimeSpan? drainBudget = null, bool deferIfBusy = false)
     {
         try
         {
+            if (deferIfBusy && drainBudget is null && _assetWriter is { PendingCount: > DrainHighWater } busy)
+            {
+                _stats.LastMaintenance =
+                    $"log flush deferred: {busy.PendingCount} tile(s) still queued (the store is behind)";
+                return;
+            }
             // Assets first, then the log. A log entry must never become durable before the tile it
             // points at, or a reader (and a crash) can see a reference to an asset that does not
             // exist yet. With this ordering the store is crash-consistent at every flush boundary: if

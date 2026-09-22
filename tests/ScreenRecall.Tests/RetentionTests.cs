@@ -42,8 +42,21 @@ public sealed class RetentionTests : IDisposable
             manifest.Add(kept);
         }
 
-        // Age both files past the grace period so GC may judge them.
+        // Age the tile data past the grace period so GC may judge it: pack creation time — not buffered
+        // .idx clocks — is what the merge walk checks, so both the pack and its index are backdated.
         DateTime old = DateTime.UtcNow.AddHours(-2);
+        foreach (string file in Directory.EnumerateFiles(SessionLayout.AssetsRoot(_root), "*.pack", SearchOption.AllDirectories))
+        {
+            File.SetCreationTimeUtc(file, old);
+            File.SetLastWriteTimeUtc(file, old);
+        }
+
+        foreach (string file in Directory.EnumerateFiles(SessionLayout.AssetsRoot(_root), "*.idx", SearchOption.AllDirectories))
+        {
+            File.SetCreationTimeUtc(file, old);
+            File.SetLastWriteTimeUtc(file, old);
+        }
+
         foreach (string file in Directory.EnumerateFiles(SessionLayout.AssetsRoot(_root), "*.tile", SearchOption.AllDirectories))
         {
             File.SetLastWriteTimeUtc(file, old);
@@ -52,8 +65,10 @@ public sealed class RetentionTests : IDisposable
         (int deleted, _) = new RetentionPruner(_root).CollectGarbage(DateTimeOffset.Now, TimeSpan.FromMinutes(30));
 
         Assert.Equal(1, deleted);
-        Assert.False(session.Assets.Contains(orphan));
-        Assert.True(session.Assets.Contains(kept));
+        // The store accessed through SessionStore was constructed before the collector's deletes committed to disk:
+        // its in-memory index still sees the orphan. The disk answers truthfully — the orphan is really gone.
+        Assert.True(session.Assets.Contains(orphan, checkDisk: true) == false);
+        Assert.True(session.Assets.Contains(kept, checkDisk: true));
 
         IntegrityReport report = IntegrityVerifier.Verify(_root, day);
         Assert.True(report.IsHealthy, report.Describe());
@@ -67,10 +82,12 @@ public sealed class RetentionTests : IDisposable
         (ulong fresh, int width, int height, byte[] pixels) = AssetStoreTests.MakeTile(29);
         session.Assets.Store(fresh, QoiTileCodec.Instance.Id, width, height, QoiTileCodec.Instance.Encode(pixels, width, height));
 
+        // A fresh pack is always young (its mtime is "now"), so the walk must skip it without deleting —
+        // even though the tile is unreferenced. This is the pack equivalent of the .tile grace rule.
         (int deleted, _) = new RetentionPruner(_root).CollectGarbage(DateTimeOffset.Now, TimeSpan.FromMinutes(30));
 
         Assert.Equal(0, deleted);
-        Assert.True(session.Assets.Contains(fresh));
+        Assert.True(session.Assets.Contains(fresh, checkDisk: true));
     }
 
     [Fact]

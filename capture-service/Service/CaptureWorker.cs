@@ -46,12 +46,19 @@ internal sealed class CaptureWorker : BackgroundService
         _lifetime = lifetime;
     }
 
-    /// <summary>Builds the capture backend, honouring the synthetic-source switch.</summary>
+    /// <summary>
+    /// Builds the capture backend.
+    ///
+    /// The synthetic desktop is a test backend and is reachable only through an explicit switch: when the real
+    /// display cannot be duplicated the service goes idle and says so, because recording invented frames at 60 a
+    /// second is both a false recording and - measured - 18% of a four-core machine (spec 5.1 / 13).
+    /// </summary>
     internal static IFrameSource CreateSource(RecallConfig config, Cli.CommandLine commandLine, out string? note)
     {
         note = null;
         if (commandLine.Synthetic)
         {
+            note = "synthetic desktop requested explicitly: this run records injected frames, not the screen";
             return new SyntheticFrameSource(
                 width: SyntheticWidth(commandLine),
                 height: SyntheticHeight(commandLine),
@@ -59,18 +66,11 @@ internal sealed class CaptureWorker : BackgroundService
                 tileSize: config.TileSize);
         }
 
-        DxgiFrameSource dxgi = DxgiFrameSource.Create(
+        // The retrying DXGI source: a locked session, a disconnected Remote Desktop session or a second instance
+        // leaves capture idle with a reported reason, and it resumes on its own when the desktop is visible again.
+        return new RecoveringDxgiSource(
             config.TileSize,
             config.CaptureAllMonitors ? null : config.MonitorIds);
-
-        if (dxgi.Monitors.Count == 0 && commandLine.SyntheticFallback)
-        {
-            note = $"DXGI duplication unavailable ({string.Join("; ", dxgi.Notes)}); falling back to the synthetic source";
-            dxgi.Dispose();
-            return new SyntheticFrameSource(1024, 768, commandLine.SyntheticIntervalMs, config.TileSize);
-        }
-
-        return dxgi;
     }
 
     private static int SyntheticWidth(Cli.CommandLine commandLine) => ParseSize(commandLine).Width;
@@ -113,6 +113,16 @@ internal sealed class CaptureWorker : BackgroundService
         foreach (string problem in _source is DxgiFrameSource { Notes: var notes } ? notes : Array.Empty<string>())
         {
             _logger.LogWarning("{Problem}", problem);
+        }
+
+        // If the desktop is not capturable right now, say so at startup rather than looking like a working
+        // recorder that simply has nothing to record (spec 13).
+        if (_source.Block is { } block)
+        {
+            _logger.LogWarning(
+                "capture is idle: {Reason}; nothing is being recorded, retrying in {RetrySeconds}s",
+                block.Describe(),
+                block.RetryInMs / 1000);
         }
 
         return MonitorAsync(stoppingToken);

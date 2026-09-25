@@ -354,6 +354,15 @@ public sealed class SessionPlayer : IDisposable
     /// Quiet stretches of the day: spans between consecutive entries longer than <paramref name="minGapUs"/>.
     /// These are where a timeline shows "nothing happened" and where a player can offer to skip ahead.
     /// </summary>
+    /// <summary>
+    /// The stretches of this day the recorder was not there for (<see cref="SessionActivity"/>). Holding a frame
+    /// across one of these would be a quiet lie, so the UI says "not recorded" instead. Recomputed per call — the
+    /// scan is one sequential pass over the fixed-size records — because a day that is still being written grows new
+    /// ones while the dashboard is open.
+    /// </summary>
+    public IReadOnlyList<RecordingGap> NotRecordedGaps()
+        => SessionActivity.NotRecordedGaps(Replayer.Store.Root, Day);
+
     public IReadOnlyList<IdleSpan> IdleSpans(long minGapUs = DefaultIdleGapUs)
     {
         ThrowIfDisposed();

@@ -9,6 +9,8 @@ internal static class ArgParser
     internal static readonly string[] ValueOptions =
     {
         "--at", "--from", "--to", "--out", "--monitor", "--max", "--dump", "--every", "--iterations", "--cell",
+        "--fps", "--speed", "--width", "--scale", "--codec", "--crf", "--preset", "--cursor", "--ffmpeg",
+        "--pix-fmt", "--tune", "--gaps",
     };
 
     /// <summary>Parses a time argument in any of the supported forms.</summary>

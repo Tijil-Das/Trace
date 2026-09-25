@@ -68,6 +68,19 @@ export interface IdleSpan {
   durationUs: number;
 }
 
+/**
+ * A stretch of the day nobody recorded, from `{cmd:'gaps'}` (pushed when a day opens). Not the same thing as an
+ * {@link IdleSpan}: there the screen stood still and holding one frame is the truth, here it went on changing and
+ * none of it exists — so the stage says so instead of showing a frozen frame as if it were current.
+ */
+export interface RecordingGap {
+  startUs: number;
+  endUs: number;
+  durationUs: number;
+  /** Why it is a gap: `recording restarted`, `recorder was not watching`, or the checkpoint-cadence fallback. */
+  reason: string;
+}
+
 /** A "the user was looking at this" stretch. Navigation metadata only. */
 export interface FocusSpan {
   appName: string;
@@ -193,6 +206,7 @@ export type OutgoingCommand =
   | { cmd: 'step'; direction: 1 | -1 }
   | { cmd: 'skipIdle' }
   | { cmd: 'idles'; minGapUs?: number }
+  | { cmd: 'gaps' }
   | { cmd: 'spans' }
   | { cmd: 'savePng' }
   | { cmd: 'status' }
@@ -241,6 +255,7 @@ export type HostMessage =
   | { type: 'config'; config?: RecallConfig }
   | { type: 'spans'; day?: string; spans?: FocusSpan[] }
   | { type: 'idles'; day?: string; spans?: IdleSpan[] }
+  | { type: 'gaps'; day?: string; gaps?: RecordingGap[] }
   | { type: 'notice'; message?: string; level?: string }
   | { type: 'lightbox'; message?: string; caption?: string; url?: string }
   | ({ type: 'pruned' } & PruneResult)

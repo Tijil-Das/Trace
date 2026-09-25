@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace ScreenRecall.Storage;
 
-/// <summary>Tiles are written, moved or cleared (spec 5.5).</summary>
+/// <summary>Tiles are written, moved or cleared (spec 5.5); the log also carries things that are not tiles.</summary>
 public enum LogOp : byte
 {
     /// <summary>A tile at (X, Y) now holds the given asset.</summary>
@@ -14,6 +14,20 @@ public enum LogOp : byte
 
     /// <summary>The tile at (X, Y) became empty (window closed, region cleared).</summary>
     Clear = 2,
+
+    /// <summary>
+    /// "The recorder was watching and nothing needed writing." Written on a timer while the recorder can see the
+    /// desktop and is not paused, so a reader can tell a quiet stretch of a day apart from a stretch the recorder
+    /// was not there for. Nothing to apply to a canvas.
+    /// </summary>
+    Heartbeat = 3,
+
+    /// <summary>
+    /// Where the mouse pointer was at this instant: (X, Y) are monitor-relative pixels, <see cref="LogEntry.WindowId"/>
+    /// packs the shape's hotspot as (x &lt;&lt; 16) | y, and <see cref="LogEntry.AssetHash"/> is the stored shape
+    /// (zero means the pointer was not visible). Nothing to apply to a canvas — replay draws the pointer over it.
+    /// </summary>
+    Pointer = 4,
 }
 
 /// <summary>
@@ -110,6 +124,42 @@ public struct LogEntry
             AssetHash = hash,
             Op = LogOp.Draw,
         };
+
+    /// <summary>Creates a HEARTBEAT entry: the recorder was watching at this instant and had nothing to write.</summary>
+    public static LogEntry Heartbeat(long timestampUs)
+        => new()
+        {
+            TimestampUs = timestampUs,
+            Op = LogOp.Heartbeat,
+        };
+
+    /// <summary>
+    /// Creates a POINTER entry. <paramref name="shapeHash"/> identifies the stored cursor shape (0 = not visible);
+    /// the hotspot is packed into the window-id field, because the record has no spare words.
+    /// </summary>
+    public static LogEntry Pointer(long timestampUs, ushort monitorId, int x, int y, int hotspotX, int hotspotY, ulong shapeHash)
+        => new()
+        {
+            TimestampUs = timestampUs,
+            WindowId = ((uint)(hotspotX & 0xFFFF) << 16) | (uint)(hotspotY & 0xFFFF),
+            MonitorId = monitorId,
+            TileX = (ushort)x,
+            TileY = (ushort)y,
+            AssetHash = shapeHash,
+            Op = LogOp.Pointer,
+        };
+
+    /// <summary>Pointer X in monitor pixels (POINTER entries only).</summary>
+    public readonly int PointerX => unchecked((short)TileX);
+
+    /// <summary>Pointer Y in monitor pixels (POINTER entries only).</summary>
+    public readonly int PointerY => unchecked((short)TileY);
+
+    /// <summary>Pointer shape hotspot X, unpacked from the window-id field.</summary>
+    public readonly int PointerHotspotX => (int)((WindowId >> 16) & 0xFFFF);
+
+    /// <summary>Pointer shape hotspot Y, unpacked from the window-id field.</summary>
+    public readonly int PointerHotspotY => (int)(WindowId & 0xFFFF);
 
     /// <summary>Creates a CLEAR entry.</summary>
     public static LogEntry Clear(long timestampUs, uint windowId, ushort monitorId, int tileX, int tileY)

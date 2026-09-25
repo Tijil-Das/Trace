@@ -25,6 +25,7 @@ internal static class Program
                 "info" => Commands.Info(args),
                 "render" => CommandsRender.Render(args),
                 "export" => CommandsRender.Export(args),
+                "video" => CommandsVideo.Video(args),
                 "fidelity" => CommandsVerification.Fidelity(args),
                 "verify" => CommandsVerification.Verify(args),
                 "spans" => CommandsVerification.Spans(args),
@@ -58,6 +59,11 @@ internal static class Program
           info   <root> <day>                              Summarize one day
           render <root> <day> [--at <time>] [options]       Reconstruct a frame as PNG
           export <root> <day> [--from <t>] [--to <t>] [--every <sec>] [--out <dir>]
+          video  <root> <day> [--from <t>] [--to <t>] [--fps <n>] [--speed <x>] [--width <px>] [--scale <f>]
+                               [--codec h264|h265|av1] [--crf <n>] [--preset <p>] [--pix-fmt <f>] [--tune <t>]
+                               [--monitor <id>]
+                               [--cursor on|off] [--gaps on|off] [--ffmpeg <path>] [--out <file>] [--dry-run]
+                               Transcode a range to a video file with ffmpeg
                                                            Export a PNG sequence for a time range
           fidelity <root> <day> [--max N] [--dump <dir>]   Pixel-diff reconstructions vs ground truth
           verify <root> <day> [--content]                  Check referenced tiles exist / are intact

@@ -104,6 +104,9 @@ public sealed partial class WebDashboardBridge
             case "idles":
                 PushIdles();
                 break;
+            case "gaps":
+                PushGaps();
+                break;
             case "spans":
                 PushSpans();
                 break;
@@ -443,6 +446,24 @@ public sealed partial class WebDashboardBridge
         Post(new { type = "idles", day = Player.Day.ToString("yyyy-MM-dd"), spans });
     }
 
+    /// <summary>
+    /// Pushes the stretches of the day that were not recorded — the ones a frozen frame would misrepresent. The
+    /// scan reads the day's log records only (no tiles, no rendering), and is recomputed rather than cached so a
+    /// day that is still being recorded grows its gaps while the dashboard is open.
+    /// </summary>
+    private void PushGaps()
+    {
+        if (Player is null)
+        {
+            return;
+        }
+
+        List<GapRow> gaps = Player.NotRecordedGaps()
+            .Select(gap => new GapRow(gap.StartUs, gap.EndUs, gap.DurationUs, gap.Reason))
+            .ToList();
+        Post(new { type = "gaps", day = Player.Day.ToString("yyyy-MM-dd"), gaps });
+    }
+
     private void PushSpans()
     {
         if (Player is null)
@@ -483,6 +504,7 @@ public sealed partial class WebDashboardBridge
         PushFrameFromPlayer();
         PushTransport();
         PushIdles();
+        PushGaps();
         PushSpans();
     }
 

@@ -73,6 +73,21 @@ internal sealed class DuplicatedFrame
     /// <summary>True when the frame carried pointer position or shape updates.</summary>
     internal bool HasPointerUpdate { get; init; }
 
+    /// <summary>
+    /// The pointer shape to draw from now on, when DXGI offered a new one with this frame. Null means "unchanged":
+    /// the caller keeps the shape it already has. The pointer is not part of <see cref="Pixels"/>.
+    /// </summary>
+    internal PointerShape? PointerShape { get; init; }
+
+    /// <summary>Pointer position in monitor pixels, as DXGI reported it.</summary>
+    internal int PointerX { get; init; }
+
+    /// <summary>Pointer position in monitor pixels, as DXGI reported it.</summary>
+    internal int PointerY { get; init; }
+
+    /// <summary>False while the pointer is hidden (a full-screen game, a touch session, a hidden cursor).</summary>
+    internal bool PointerVisible { get; init; }
+
     /// <summary>Time spent copying the frame into a staging texture and reading it back, in ms.</summary>
     internal double ReadbackMs { get; init; }
 }

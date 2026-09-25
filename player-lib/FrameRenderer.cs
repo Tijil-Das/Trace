@@ -10,6 +10,13 @@ public sealed record RenderedFrame(ushort MonitorId, int X, int Y, int Width, in
 }
 
 /// <summary>
+/// The mouse pointer as the recorder saw it: monitor-relative pixel position, the hotspot of the shape it was
+/// drawn with, and the hash of that shape in the asset store. A pointer is state, not content — the pointer is
+/// never part of the duplicated pixels, so replay draws it over the reconstructed screen instead.
+/// </summary>
+public sealed record PointerState(ushort MonitorId, int X, int Y, int HotspotX, int HotspotY, ulong ShapeHash);
+
+/// <summary>
 /// Turns a canvas into pixels (spec 7). Tile blits only — no bitstream decode — with tiles fetched
 /// from the decode cache and blitted in parallel across tile rows, which is what makes scrubbing and
 /// faster-than-real-time playback cheap on any modern machine.
@@ -25,6 +32,19 @@ public sealed class FrameRenderer
 
     /// <summary>Decode cache backing this renderer.</summary>
     public TileCache Cache => _cache;
+
+    /// <summary>
+    /// Draw the recorded mouse pointer over the picture. On by default: the pointer was on the screen, and a frame
+    /// without it is a frame the user never saw. Turning it off is for comparisons and for exports that want the
+    /// screen without a cursor in it.
+    /// </summary>
+    public bool IncludeCursor { get; set; } = true;
+
+    /// <summary>
+    /// Where the pointer is, as of the position being rendered. Set by the replay cursor as it applies log entries;
+    /// null means the pointer was not visible.
+    /// </summary>
+    public PointerState? Pointer { get; set; }
 
     /// <summary>Renders one monitor's canvas state.</summary>
     public RenderedFrame Render(ScreenCanvas canvas, MonitorInfo monitor)
@@ -54,6 +74,14 @@ public sealed class FrameRenderer
                 Blit(tile, buffer, stride, x, y, width, height);
             }
         });
+
+        if (Pointer is { } pointer && pointer.MonitorId == monitor.Id)
+        {
+            // DXGI's own rule: the shape's top-left corner goes at the reported position, and the hot spot is not
+            // applied when drawing (see DXGI_OUTDUPL_POINTER_SHAPE_INFO). The hot spot is still recorded, so the
+            // other reading of that field stays a one-line change here.
+            DrawPointer(buffer, stride, monitor.Width, monitor.Height, pointer.X, pointer.Y);
+        }
 
         return new RenderedFrame(monitor.Id, monitor.X, monitor.Y, monitor.Width, monitor.Height, buffer);
     }
@@ -88,6 +116,7 @@ public sealed class FrameRenderer
             }
         }
 
+        DrawPointerOverVirtualDesktop(canvas, composite, compositeStride, width, height, left, top);
         return new RenderedFrame(0, left, top, width, height, composite);
     }
 
@@ -132,7 +161,91 @@ public sealed class FrameRenderer
             RenderInto(canvas, monitor, destination, width * 4, monitor.X - left, monitor.Y - top);
         }
 
+        DrawPointerOverVirtualDesktop(canvas, destination, width * 4, width, height, left, top);
         return new RenderedFrame(0, left, top, width, height, destination);
+    }
+
+    /// <summary>
+    /// Places the pointer on a virtual-desktop frame: the pointer's own monitor says where that monitor's origin
+    /// sits inside the composite, and the frame's own origin says where the composite starts.
+    /// </summary>
+    private void DrawPointerOverVirtualDesktop(
+        ScreenCanvas canvas, byte[] destination, int stride, int width, int height, int frameLeft, int frameTop)
+    {
+        if (Pointer is not { } pointer || canvas.Monitor(pointer.MonitorId) is not { } monitor)
+        {
+            return;
+        }
+
+        DrawPointer(
+            destination,
+            stride,
+            width,
+            height,
+            monitor.X - frameLeft + pointer.X,
+            monitor.Y - frameTop + pointer.Y);
+    }
+
+    /// <summary>
+    /// Blends the pointer shape into a finished frame, source-over. The shape is an ordinary small asset — encoded
+    /// by whichever codec wrote the session, so it comes out of the same decode cache the tiles do — and a shape
+    /// that never reached the store leaves the picture alone rather than drawing a guess.
+    /// </summary>
+    private void DrawPointer(byte[] destination, int stride, int width, int height, int x, int y)
+    {
+        if (!IncludeCursor || Pointer is not { } pointer)
+        {
+            return;
+        }
+
+        TileBitmap? shape = _cache.Get(pointer.ShapeHash);
+        if (shape is null)
+        {
+            return;
+        }
+
+        for (int row = 0; row < shape.Height; row++)
+        {
+            int targetY = y + row;
+            if (targetY < 0 || targetY >= height)
+            {
+                continue;
+            }
+
+            int sourceRow = row * shape.Stride;
+            for (int column = 0; column < shape.Width; column++)
+            {
+                int source = sourceRow + (column * 4);
+                byte alpha = shape.Bgra[source + 3];
+                if (alpha == 0)
+                {
+                    continue;
+                }
+
+                int targetX = x + column;
+                if (targetX < 0 || targetX >= width)
+                {
+                    continue;
+                }
+
+                int target = (targetY * stride) + (targetX * 4);
+                if (alpha == 255)
+                {
+                    destination[target] = shape.Bgra[source];
+                    destination[target + 1] = shape.Bgra[source + 1];
+                    destination[target + 2] = shape.Bgra[source + 2];
+                }
+                else
+                {
+                    int inverse = 255 - alpha;
+                    destination[target] = (byte)((shape.Bgra[source] * alpha + destination[target] * inverse + 127) / 255);
+                    destination[target + 1] = (byte)((shape.Bgra[source + 1] * alpha + destination[target + 1] * inverse + 127) / 255);
+                    destination[target + 2] = (byte)((shape.Bgra[source + 2] * alpha + destination[target + 2] * inverse + 127) / 255);
+                }
+
+                destination[target + 3] = 255;
+            }
+        }
     }
 
     /// <summary>Blits one monitor's canvas state into a larger buffer at a pixel offset.</summary>

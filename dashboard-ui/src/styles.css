@@ -422,11 +422,118 @@ textarea {
   background: #101822;
   border: 1px solid var(--line);
   color: var(--text-faint);
+  transition: opacity 160ms ease;
 }
 
 .screen__badge--live {
   color: var(--ok);
   border-color: #1d3a24;
+}
+
+/* -------------------------------------------------------------- player mode */
+
+/* The player wrapper: the screen plus its transport and timeline. This is the element that goes fullscreen,
+   so the controls travel with the picture — a fullscreen picture with no controls is a screenshot. */
+.player {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* One set of rules describes the mode, whether the browser was asked or the overlay was used. `:fullscreen` is
+   listed alongside so the layout still holds in the instant before the state catches up with the event. */
+.player--immersive,
+.player:fullscreen {
+  gap: 0;
+  padding: 0;
+  background: #05080c;
+}
+
+/* The same player lifted over the app window, for a runtime without the Fullscreen API or a host that declines
+   the request. Toasts (z-index 40) still come through. */
+.player--fill {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+}
+
+.player__video {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+
+.player__chrome {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 10px;
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+/* Fullscreen: the controls stop taking height from the picture and float over it, the way a player's do. */
+.player--immersive .player__chrome,
+.player:fullscreen .player__chrome {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  padding: 10px;
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(11, 15, 20, 0.88), rgba(11, 15, 20, 0.97));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+/* The picture owns every pixel it can: in fullscreen a frame is not in a panel, it is the display. */
+.player--immersive .screen,
+.player:fullscreen .screen {
+  border: 0;
+  border-radius: 0;
+}
+
+/* Idle in fullscreen: nobody has moved the mouse or pressed a key for a few seconds, so everything that is
+   chrome goes — controls, badge and pointer — and the picture is all that is left. */
+.player--idle .player__chrome,
+.player--idle .screen__badge {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.player--idle .player__chrome {
+  transform: translateY(8px);
+}
+
+.player--idle,
+.player--idle * {
+  cursor: none;
+}
+
+/* An error outlives the chrome, and in fullscreen there is no flow left to put it in, so it floats. */
+.player--immersive .player__error,
+.player:fullscreen .player__error {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  margin: 0;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: #2a1416;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+.player__hint {
+  margin: 0;
+  font-size: 11.5px;
+  text-align: right;
+  color: var(--text-faint);
 }
 
 /* --------------------------------------------------------------- transport */
@@ -910,4 +1017,87 @@ p.field__hint {
 
 .toast__close:hover {
   color: var(--text);
+}
+
+/* --- unrecorded stretches: a gap, not a quiet patch (see SessionActivity) ------------------------------ */
+.timeline__gap {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, #4a2029, #4a2029 4px, #33161d 4px, #33161d 8px);
+  border-left: 1px solid #6b2f3a;
+  border-right: 1px solid #6b2f3a;
+}
+
+.swatch--gap {
+  background: repeating-linear-gradient(135deg, #4a2029, #4a2029 2px, #33161d 2px, #33161d 4px);
+  border: 1px solid #6b2f3a;
+}
+
+
+/* The held frame is not current content: hide it, and say so in vector - DOM plus inline SVG - instead of with a
+   dimmed raster of the screen. Grid stacking keeps the card exactly the size of the canvas it replaces. */
+.screen--gap {
+  display: grid;
+  place-items: center;
+}
+
+.screen--gap .screen__canvas {
+  grid-area: 1 / 1;
+  visibility: hidden;
+  filter: none;
+}
+
+.screen__gap {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  max-width: 560px;
+  padding: 18px 22px;
+  border-radius: 10px;
+  background: rgba(27, 16, 21, 0.94);
+  border: 1px solid #7a3646;
+  color: #cbb9c0;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.screen__gap-icon {
+  width: 58px;
+  height: 58px;
+  margin-bottom: 4px;
+  fill: #c25b72;
+}
+
+.screen__gap-icon .screen__gap-slash {
+  fill: none;
+  stroke: #c25b72;
+  stroke-width: 6;
+  stroke-linecap: round;
+}
+
+.screen__gap-title {
+  margin: 0;
+  color: #f3dde3;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.screen__gap-meta {
+  margin: 0;
+  color: #c25b72;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+}
+
+.screen__gap-note {
+  margin: 6px 0 0;
+  max-width: 46ch;
+  color: #9c848c;
 }

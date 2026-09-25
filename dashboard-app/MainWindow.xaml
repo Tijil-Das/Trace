@@ -6,7 +6,7 @@
         Title="Screen Recall — dashboard" Height="820" Width="1300"
         Background="{StaticResource SurfaceBrush}"
         Closing="OnClosing" Loaded="OnLoaded" SourceInitialized="OnSourceInitialized">
-  <Grid Margin="12">
+  <Grid x:Name="Root" Margin="12">
     <Grid.ColumnDefinitions>
       <ColumnDefinition Width="280" />
       <ColumnDefinition Width="*" />

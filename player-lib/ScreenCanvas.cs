@@ -76,9 +76,16 @@ public sealed class ScreenCanvas
         return index >= 0 && index < tiles.Length ? tiles[index] : TileHash.None;
     }
 
-    /// <summary>Applies one log entry to the canvas.</summary>
+    /// <summary>Applies one log entry to the canvas. Entries that are not about tiles are ignored.</summary>
     public void Apply(in LogEntry entry)
     {
+        // Ops that are not tile state (heartbeats, pointer moves) ride in the same 27-byte record and must never
+        // reach the tile map: an unknown op is not a draw of whatever happens to be in its fields.
+        if (entry.Op is not (LogOp.Draw or LogOp.Move or LogOp.Clear))
+        {
+            return;
+        }
+
         if (!_tiles.TryGetValue(entry.MonitorId, out ulong[]? tiles)
             || !_monitors.TryGetValue(entry.MonitorId, out MonitorInfo? monitor))
         {

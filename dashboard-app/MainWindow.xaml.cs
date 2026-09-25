@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 
+using ScreenRecall.Dashboard.Interop;
 using ScreenRecall.Dashboard.Services;
 using ScreenRecall.Player;
 using ScreenRecall.Storage;
@@ -27,6 +28,12 @@ public partial class MainWindow : Window
     private System.Windows.Threading.DispatcherTimer? _statusTimer;
     private bool _scrubbing;
     private bool _needsRender;
+    private bool _isFullScreen;
+    private WindowState _stateBeforeFullScreen;
+    private WindowStyle _styleBeforeFullScreen;
+    private ResizeMode _resizeBeforeFullScreen;
+    private Rect _boundsBeforeFullScreen;
+    private bool _boundsBeforeFullScreenValid;
 
     public MainWindow()
     {
@@ -120,6 +127,7 @@ public partial class MainWindow : Window
 
         bridge.OpenDay = OpenDayForPlayer;
         bridge.Player = _player;
+        bridge.FullScreenChanged = SetFullScreen;
         _bridge = bridge;
         HideWpfPanels();
     }
@@ -133,6 +141,94 @@ public partial class MainWindow : Window
         FocusPanel.Visibility = Visibility.Collapsed;
         Settings.Visibility = Visibility.Collapsed;
         WebHost.Visibility = Visibility.Visible;
+
+        // The React dashboard manages its own spacing, and it is the thing that goes fullscreen: the window's
+        // padding would show up as a frame of app background around the picture. The WPF fallback panels keep it.
+        Root.Margin = new Thickness(0);
+    }
+
+    /// <summary>
+    /// Makes the window match the page. WebView2 hands the fullscreen element the whole control; a window with
+    /// a title bar, a taskbar or a margin still on top would leave the picture short of the edges of the display,
+    /// which is the one thing the mode is for. Nothing about playback changes here — the page owns the mode, the
+    /// shell only gets out of its way.
+    /// </summary>
+    private void SetFullScreen(bool fullScreen)
+    {
+        if (fullScreen == _isFullScreen)
+        {
+            return;
+        }
+
+        _isFullScreen = fullScreen;
+        try
+        {
+            if (fullScreen)
+            {
+                _stateBeforeFullScreen = WindowState;
+                _styleBeforeFullScreen = WindowStyle;
+                _resizeBeforeFullScreen = ResizeMode;
+                _boundsBeforeFullScreen = new Rect(Left, Top, Width, Height);
+                _boundsBeforeFullScreenValid = WindowState == WindowState.Normal;
+
+                WindowState = WindowState.Normal;
+                WindowStyle = WindowStyle.None;
+                ResizeMode = ResizeMode.NoResize;
+                CoverMonitor();
+                return;
+            }
+
+            // The same trap on the way back: restore the chrome and the resize behaviour first, then the state —
+            // and only trust the saved rectangle when the window was not maximised when it went fullscreen.
+            WindowState = WindowState.Normal;
+            WindowStyle = _styleBeforeFullScreen;
+            ResizeMode = _resizeBeforeFullScreen;
+            if (_stateBeforeFullScreen == WindowState.Normal && _boundsBeforeFullScreenValid)
+            {
+                Left = _boundsBeforeFullScreen.Left;
+                Top = _boundsBeforeFullScreen.Top;
+                Width = _boundsBeforeFullScreen.Width;
+                Height = _boundsBeforeFullScreen.Height;
+            }
+
+            WindowState = _stateBeforeFullScreen;
+        }
+        catch (InvalidOperationException)
+        {
+            // The window is tearing down; there is nothing left to resize.
+            _isFullScreen = false;
+        }
+    }
+
+    /// <summary>
+    /// Puts the window exactly over the monitor it is on, taskbar area included. Both the system and WPF are
+    /// told, in that order: the system call is the authority (physical pixels, straight from the monitor), and
+    /// WPF's own idea of the window has to agree or the next layout pass would put it back.
+    /// </summary>
+    private void CoverMonitor()
+    {
+        IntPtr handle = new WindowInteropHelper(this).Handle;
+        if (!NativeMethods.TryGetMonitorBounds(handle, out NativeMethods.Rect bounds))
+        {
+            // No monitor to ask (a window being torn down): a plain maximise is at least the right direction.
+            WindowState = WindowState.Maximized;
+            return;
+        }
+
+        DpiScale dpi = VisualTreeHelper.GetDpi(this);
+        Left = bounds.Left / dpi.DpiScaleX;
+        Top = bounds.Top / dpi.DpiScaleY;
+        Width = bounds.Width / dpi.DpiScaleX;
+        Height = bounds.Height / dpi.DpiScaleY;
+
+        NativeMethods.SetWindowPos(
+            handle,
+            IntPtr.Zero,
+            bounds.Left,
+            bounds.Top,
+            bounds.Width,
+            bounds.Height,
+            NativeMethods.SwpNoZOrder | NativeMethods.SwpNoActivate | NativeMethods.SwpFrameChanged);
     }
 
     private void OnSourceInitialized(object sender, EventArgs e)

@@ -14,7 +14,7 @@ export function App() {
   const [section, setSection] = useState<Section>('revisit');
   const { mode, days, status, lastError, toasts, dismissToast, refresh } = useRecall();
 
-  // Space and arrows drive playback wherever focus is, except while typing in a field.
+  // Space, the arrows and F drive the player wherever focus is, except while typing in a field.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -31,6 +31,10 @@ export function App() {
       } else if (event.key === 'ArrowLeft') {
         event.preventDefault();
         window.dispatchEvent(new CustomEvent('screen-recall:step', { detail: -1 }));
+      } else if ((event.key === 'f' || event.key === 'F') && !event.ctrlKey && !event.altKey && !event.metaKey) {
+        // "f" is what every video player uses for fullscreen; Ctrl+F stays the browser's own find.
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('screen-recall:toggle-fullscreen'));
       }
     };
 

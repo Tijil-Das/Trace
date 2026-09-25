@@ -64,6 +64,16 @@ public sealed partial class SessionReplayer : IDisposable
     /// <summary>Checkpoint timestamps available for this day.</summary>
     public IReadOnlyList<long> Checkpoints => _checkpoints;
 
+    /// <summary>
+    /// Where the mouse pointer was at <see cref="PositionUs"/>, or null when it was not visible.
+    /// </summary>
+    /// <remarks>
+    /// The pointer never reaches the duplicated pixels, so it is recorded as its own state and drawn over the
+    /// reconstructed screen. A checkpoint does not carry it either: it is re-established by the pointer entry the
+    /// recorder writes alongside every checkpoint, and then updated by each pointer entry the replay walks over.
+    /// </remarks>
+    public PointerState? Pointer { get; private set; }
+
     /// <summary>Timestamp of the next entry that would be applied, or null at end of log.</summary>
     public long? NextEntryTimestampUs => Peek()?.TimestampUs;
 
@@ -77,6 +87,11 @@ public sealed partial class SessionReplayer : IDisposable
 
         Canvas.Reset();
         ApplyGeometry(timestampUs / 1000);
+
+        // The pointer is state the checkpoint does not hold: clear it so a seek never shows the cursor from the
+        // position the canvas was at before, and let the replay below re-establish it from the log.
+        Pointer = null;
+        Renderer.Pointer = null;
 
         long startFrom = 0;
         if (checkpointUs is not null)
@@ -157,6 +172,26 @@ public sealed partial class SessionReplayer : IDisposable
 
     private void Apply(in LogEntry entry)
     {
+        if (entry.Op == LogOp.Pointer)
+        {
+            // Position, visibility and shape are absolute values, so the newest entry is the whole truth: a zero
+            // shape hash means "not visible", anything else is the shape to draw under the hotspot.
+            Pointer = entry.AssetHash == 0
+                ? null
+                : new PointerState(
+                    entry.MonitorId,
+                    entry.PointerX,
+                    entry.PointerY,
+                    entry.PointerHotspotX,
+                    entry.PointerHotspotY,
+                    entry.AssetHash);
+            Renderer.Pointer = Pointer;
+            PositionUs = entry.TimestampUs;
+            EntriesApplied++;
+            Consume();
+            return;
+        }
+
         SyncGeometry(entry);
         Canvas.Apply(entry);
         PositionUs = entry.TimestampUs;

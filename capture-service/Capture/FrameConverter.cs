@@ -44,7 +44,14 @@ internal static class FrameConverter
             acquired.NeedsFullRescan,
             acquired.ProtectedContentMaskedOut,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1000,
-            acquired.ReadbackMs);
+            acquired.ReadbackMs)
+        {
+            HasPointerUpdate = acquired.HasPointerUpdate,
+            PointerShape = acquired.PointerShape,
+            PointerX = acquired.PointerX,
+            PointerY = acquired.PointerY,
+            PointerVisible = acquired.PointerVisible,
+        };
     }
 
     private static IntRect Scale(int x, int y, int width, int height, double scaleX, double scaleY)

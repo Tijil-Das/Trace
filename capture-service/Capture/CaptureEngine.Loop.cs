@@ -64,6 +64,11 @@ internal sealed partial class CaptureEngine
                 if (!acquired)
                 {
                     _cadence.OnIdle(timeout);
+
+                    // Nothing arrived: either nothing changed (the heartbeat below records that the recorder was
+                    // still watching) or the loop is blocked, in which case it writes nothing and the hole in the log
+                    // is the record of it. See WriteHeartbeat.
+                    WriteHeartbeat();
                     Maintenance();
                     continue;
                 }

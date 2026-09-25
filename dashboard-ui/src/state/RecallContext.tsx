@@ -16,6 +16,7 @@ import {
   type DayInfo,
   type FocusSpan,
   type IdleSpan,
+  type RecordingGap,
   type OpenedSession,
   type RecallConfig,
   type ReplayRow,
@@ -80,6 +81,8 @@ export interface RecallContextValue {
   replayCheckpoints: number | null;
   idles: IdleSpan[];
   idlesState: LoadState;
+  gaps: RecordingGap[];
+  gapsState: LoadState;
   idleMinGapUs: number;
   setIdleMinGapUs(us: number): void;
   spans: FocusSpan[];
@@ -185,6 +188,8 @@ export function RecallProvider({ children }: { children: ReactNode }): ReactElem
   const [replayCheckpoints, setReplayCheckpoints] = useState<number | null>(null);
   const [idles, setIdles] = useState<IdleSpan[]>([]);
   const [idlesState, setIdlesState] = useState<LoadState>('loading');
+  const [gaps, setGaps] = useState<RecordingGap[]>([]);
+  const [gapsState, setGapsState] = useState<LoadState>('loading');
   const [idleMinGapUs, setIdleMinGapUsState] = useState<number>(DEFAULT_IDLE_GAP_US);
   const [spans, setSpans] = useState<FocusSpan[]>([]);
   const [spansState, setSpansState] = useState<LoadState>('loading');
@@ -394,6 +399,14 @@ export function RecallProvider({ children }: { children: ReactNode }): ReactElem
     );
 
     offs.push(
+      bridge.on('gaps', (msg) => {
+        const list = Array.isArray(msg.gaps) ? msg.gaps : [];
+        setGaps(list);
+        setGapsState(list.length === 0 ? 'empty' : 'ready');
+      }),
+    );
+
+    offs.push(
       bridge.on('notice', (msg) => {
         const kind = msg.level === 'warn' ? 'warn' : msg.level === 'success' ? 'success' : msg.level === 'error' ? 'error' : 'info';
         const text = msg.message && msg.message.trim().length > 0 ? msg.message : 'Host notice with no message.';
@@ -490,6 +503,7 @@ export function RecallProvider({ children }: { children: ReactNode }): ReactElem
       setReplaysState('loading');
       setSpansState('loading');
       setIdlesState('loading');
+      setGapsState('loading');
       clearSessionTimer();
       bridge.openDay(day);
 
@@ -606,6 +620,8 @@ export function RecallProvider({ children }: { children: ReactNode }): ReactElem
     replayCheckpoints,
     idles,
     idlesState,
+    gaps,
+    gapsState,
     idleMinGapUs,
     setIdleMinGapUs,
     spans,

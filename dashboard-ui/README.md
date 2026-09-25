@@ -35,14 +35,30 @@ cmd /c npm run dev
 
 - **Revisit** — pick a recorded day, watch it back, inspect what was recorded.
   - Frame stage: a `<canvas>` painted straight from the host's shared buffer.
-  - Transport: play/pause, step by one event, skip the next quiet stretch, 0.5×–8×, Save PNG, playhead clock.
+  - Transport: play/pause, step by one event, skip the next quiet stretch, 0.5×–8×, Save PNG, full screen, playhead clock.
   - Timeline: quiet stretches drawn as bands, focus changes as ticks, playhead, scrubbing.
   - **Recorded stretches**: one row per log segment — the day's replay list — with a jump-to-start action.
   - Jump to focus: window spans from the navigation index.
 - **Settings** — live capture-service status (polled every 2 s) and the recording configuration, plus
   pause/resume, purge-recent, prune-now and open-storage-folder.
 
-Space toggles playback and ←/→ step, except while a text field has focus.
+Space toggles playback, ←/→ step and `F` toggles full screen, except while a text field has focus.
+
+## Full screen
+
+The player goes full screen the way a video player does — the picture fills the display, the transport and the
+timeline float over it, and they fade out after ~2.5 s of no mouse, click or key and come back the moment there
+is one. They stay put while the pointer rests on them, the cursor goes with them, and `Esc` — or a second click
+on the button, or `F`, or a double-click on the picture — leaves the mode.
+
+The mode is the browser's own (`requestFullscreen` on the stage element), not a CSS impression of one, which is
+what lets the WPF shell follow: WebView2 raises `ContainsFullScreenElementChanged`, `WebDashboardBridge` reports
+it through `FullScreenChanged`, and `MainWindow` puts the window exactly over the monitor — borderless, at the
+monitor's own rectangle (taskbar included), with the window's padding dropped for as long as the React UI is in
+charge — so the picture reaches the edges of the display and lands on whole pixels. Nothing about playback
+changes with it — the page owns the mode and the window only stops being in the way. If the API is unavailable or
+the host refuses the request, the same layout is applied as an in-window overlay instead, so the mode is never a
+dead button.
 
 ## Frames
 

@@ -16,7 +16,7 @@ dashboard all exist and run; packaging is deliberately not done yet (see *Status
 | Capture service (DXGI duplication) | Working: adaptive cadence, dirty/move rects, 64px grid tiling, xxHash3, dedupe, QOI, checkpoints, exclusions, pause, self-throttling, named-pipe IPC, Windows-service or console mode |
 | Storage subsystem | Working: content-addressable store, per-day reference log, checkpoints, per-day asset manifests, SQLite navigation index, retention pruning + asset GC, panic purge |
 | Player | Working: checkpoint + replay seek, reconstruction, PNG export, fidelity harness, integrity check, seek benchmark |
-| Dashboard | Working shell: day list, scrubber, play/pause/speed, frame view, jump-to-focus, live resource meter, settings, pause/resume, purge and prune, tray icon, global hotkey |
+| Dashboard | Working shell: day list, scrubber, play/pause/speed, fullscreen player, frame view, jump-to-focus, live resource meter, settings, pause/resume, purge and prune, tray icon, global hotkey |
 | Tests | 44 xUnit tests green, including an end-to-end capture→replay→pixel-diff test |
 | Encryption at rest | **Not implemented** (interface reserved; see ROADMAP) |
 | Text index, MP4 export | **Not implemented** (spec §7, optional) |
@@ -147,3 +147,71 @@ Result on this machine: *11 frames checked, 11 exact, pixel match 100.0000%*.
 - [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) — the CPU budget from spec §3: how it's measured, the definition
   of done for capture-loop changes, and the design decisions that currently put it at risk.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — what is done, what is deliberately deferred, and the known gaps.
+
+## Video export
+
+`player-cli video` transcodes a range of a recorded day into a real video file. The recording stays what it is — a
+lossless log of reconstructed frames — and this is a transcode of a range of it: frames are reconstructed exactly as
+playback reconstructs them (checkpoint + replay, recorded pointer blended in) and piped as raw BGRA into ffmpeg,
+which does the encoding. Nothing re-encodes the store, and every export is reproducible from the log.
+
+```bash
+dotnet run --project player-cli -- video <root> <day> [options]
+
+  --from <t> --to <t>     range: 10:15:30.250, +90s, 12:00, or 90  (default: the whole day)
+  --out <file.mp4>        output file (default screen-recall-<day>.mp4)
+  --fps <n>               frames written per second of video (default 30)
+  --speed <x>             playback speed: 2 exports twice as fast, 0.5 half (default 1)
+  --width <px> | --scale <f>   resize (scaling is done by ffmpeg, aspect kept, even pixels)
+  --codec h264|h265|av1|<encoder>   default h264 (libx264); any ffmpeg encoder name also works
+  --crf <n>               quality: lower is better and bigger (default 18)
+  --preset <p>            encoder preset (default medium for libx264/libx265)
+  --pix-fmt <f>           yuv420p (default) or yuv444p for crisp coloured text
+  --tune <t>              e.g. stillimage for screen content
+  --monitor <id>          export one monitor instead of the whole virtual desktop
+  --cursor on|off         include the recorded pointer (default on)
+  --gaps on|off           bake a "not recorded" card into frames from a stretch nobody recorded (default on)
+  --ffmpeg <path>         ffmpeg executable (default: PATH, then C:\ffmpeg\bin\ffmpeg.exe)
+  --overwrite             replace an existing output file
+  --dry-run               print the resolved plan and the exact ffmpeg command, write nothing
+```
+
+### Quality versus size
+
+CRF means "this much distortion", so the way to spend fewer bits for the same picture is to give the encoder more
+time, not to loosen the target. Measured on a 1366x768 recording, 4 frames:
+
+| settings | bytes | video |
+| --- | --- | --- |
+| `--preset veryfast` (old default), crf 18, yuv420p | 96,175 | H.264 High, 4:2:0 |
+| **default now**: `--preset medium`, crf 18, yuv420p | **95,155** | H.264 High, 4:2:0 |
+| `--preset slow --pix-fmt yuv444p --tune stillimage --crf 16` | 112,479 | H.264 High 4:4:4, 4:4:4 |
+
+The default preset alone gives a *smaller* file at the same CRF — the extra encode time is invisible next to
+reconstructing the frames, which costs far more. The third row is the crisp-text recipe: full chroma resolution is
+what sharpens coloured text and thin UI edges (`yuv420p` halves chroma, which reads as haze on coloured detail), and
+it costs about 17% more. For a sharper export without touching size much, `--preset slow` alone is the free half of
+the upgrade.
+
+### "Not recorded" is not the same as "nothing changed"
+
+The log only grows when something changes, so a quiet hour and a switched-off recorder used to leave the same trail:
+a hole. Two things now separate them.
+
+* The service writes a **heartbeat** every 15 seconds while it is watching and has nothing to write (27 bytes each),
+  so any hole in a segment that carries heartbeats is a stretch the recorder was not watching.
+* A hole that spans two **segments** is a restart, which is certain. For stores written before heartbeats existed,
+  `SessionActivity` falls back to the checkpoint cadence and says in the reason that it is a heuristic.
+
+`SessionActivity.NotRecordedGaps(root, day)` returns those stretches, both surfaces say so instead of holding a frame as if it were current:
+
+* **Playback** hides the held frame and replaces it with a vector card - DOM plus an inline SVG camera-with-a-slash -
+  reading "Recording unavailable", the duration and the reason. Vector, not a raster: it stays crisp at any window
+  size, and nothing about it can be mistaken for what was on screen.
+* **The export** bakes the same card into the frames it covers, rasterised from a built-in 5x7 font (a video has no
+  DOM): hatched background, bordered panel, the same icon and words, with `--gaps off` to opt out and get the raw
+  held frames. The summary reports how many frames were marked.
+
+Stretches shorter than two minutes are never reported: a busy desktop that logs nothing for a minute is not a missing
+recording. For a store written before heartbeats existed the fallback is five minutes with two checkpoints missing
+from it - a warning, not a certainty, and the reason text says which evidence produced the stretch.

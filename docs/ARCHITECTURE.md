@@ -99,11 +99,16 @@ loop's two-second flush *defers* past 512 queued payloads rather than stalling o
 prune, rollover, shutdown) always wait, because they act on what the log says. The ordering rule is unchanged: a log
 entry never becomes durable before the tile it references.
 
-**Cursor and DRM handling is explicit.** Pointer updates arrive as metadata, never as dirty rects, so a
-pointer-only frame is skipped. A present with no rect list at all triggers a full-surface rescan that is
-*rate limited but never dropped*: the engine remembers a rescan is owed, so a later dirty-rect frame can
-never log a screen state that silently omits the changes it missed. This was found by the fidelity
-harness, not by reasoning.
+**Cursor and DRM handling is explicit.** Pointer updates arrive as metadata, never as dirty rects, and they are
+recorded as such: the cursor's shape is stored once as an ordinary asset, and its position becomes a `POINTER`
+log entry written when it moves more than 2 px, changes shape, changes visibility, or right after every
+checkpoint — a checkpoint cannot carry the pointer, so the state is re-stated beside it and a seek from that
+checkpoint knows where the cursor was. Replay blends the shape over the reconstructed screen, so a frame shows the
+pointer the user actually saw; `FrameRenderer.IncludeCursor` turns that off for comparisons and exports. A present
+with no rect list at all (the pointer moving over a still screen, or a layered overlay) triggers a full-surface
+rescan that is *rate limited but never dropped*: the engine remembers a rescan is owed, so a later dirty-rect frame
+can never log a screen state that silently omits the changes it missed. This was found by the fidelity harness,
+not by reasoning.
 
 **Privacy is enforced before any pixel is read.** If the foreground window matches the exclusion list,
 nothing is recorded for that period, and a full rescan follows once it loses focus — the log stays

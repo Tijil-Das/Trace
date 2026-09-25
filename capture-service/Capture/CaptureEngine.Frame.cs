@@ -39,6 +39,11 @@ internal sealed partial class CaptureEngine
         _stats.LastDirtyRects = frame.DirtyRects.Count;
         _stats.LastMoveRects = frame.MoveRects.Count;
 
+        // The pointer is recorded before the rects are judged, and before a deferred rescan can return early: a
+        // cursor moving over a still screen presents with no dirty rects at all, and that is content — see
+        // RecordPointer. nowMs is the frame's timestamp, reused for the tile entries below.
+        RecordPointer(frame, nowMs * 1000, force: false);
+
         // A deferred rescan is an owed rescan, never a dropped one. Until it is honoured the canvas
         // cannot be trusted, so no frame is processed (the screen would look settled while it is not),
         // and once the rate limit allows, the very next frame is rescanned in full even if DXGI
@@ -117,6 +122,10 @@ internal sealed partial class CaptureEngine
         if (timestampUs - _lastCheckpointUs >= _config.CheckpointSeconds * 1_000_000L)
         {
             WriteCheckpoint(timestampUs, force: false);
+
+            // A checkpoint does not carry the pointer, so the state is re-stated right after it: a seek that starts
+            // from this checkpoint has to know where the cursor was rather than wait for it to move again.
+            RecordPointer(frame, timestampUs, force: true);
         }
 
         return changes > 0 || frame.HasChanges;

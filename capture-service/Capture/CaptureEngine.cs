@@ -54,6 +54,13 @@ internal sealed partial class CaptureEngine : IDisposable
     private long _lastDiskCheckMs;
     private long _lastFullRescanMs;
     private long _lastGroundTruthMs;
+    private int _lastPointerX = int.MinValue;
+    private int _lastPointerY = int.MinValue;
+    private bool _lastPointerVisible;
+    private int _lastPointerHotspotX;
+    private int _lastPointerHotspotY;
+    private ulong _lastPointerShapeHash;
+    private long _lastPointerUs;
     private bool _owedRescan;
     private long _lastAssetStatsMs;
     private int _assetStatsRefreshing;

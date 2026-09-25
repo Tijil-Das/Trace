@@ -46,7 +46,7 @@ Then a stream of fixed **27-byte** records:
 | 14 | u16 | tile x — **absolute** grid column, signed 16-bit bit pattern (monitors left of the primary are negative) |
 | 16 | u16 | tile y — absolute grid row |
 | 18 | u64 | asset hash (0 = cleared/empty) |
-| 26 | u8 | op: 0 = DRAW, 1 = MOVE, 2 = CLEAR |
+| 26 | u8 | op: 0 = DRAW, 1 = MOVE, 2 = CLEAR, 3 = HEARTBEAT, 4 = POINTER |
 
 Notes:
 
@@ -56,6 +56,21 @@ Notes:
 - `CLEAR` is emitted when a monitor disappears; ordinary screen changes are draws of newly visible content.
 - An all-zero record is never valid (timestamps are non-zero). The writer refuses to persist one and counts
   it as an integrity fault.
+- `HEARTBEAT` says the recorder was watching and had nothing to write: it carries a timestamp and nothing else.
+  It is what lets a reader tell a *quiet* stretch — where holding the last frame is the truth — apart from a
+  stretch the recorder was not running for. Written at most every 15 s, and only while the recorder can see the
+  desktop and is not paused, so its absence means something.
+- `POINTER` carries the mouse pointer, which never appears in the duplicated pixels. `tile x` / `tile y` hold the
+  position in monitor pixels, `window id` packs the shape's hotspot as `(x << 16) | y`, and `asset hash` is the
+  stored shape — **a zero hash means the pointer was not visible**. Written when the pointer moves more than 2 px,
+  changes shape or changes visibility (at most 20 entries/s), and once right after every checkpoint, because a
+  checkpoint cannot carry it.
+- A pointer **shape is an ordinary asset**: same header, same codec byte, its own width and height. A day holds a
+  handful of them, they dedupe like anything else, and retention keeps them alive for as long as the day that
+  references them.
+- **Readers must skip ops they do not know.** The records share a layout but mean different things, so applying a
+  `HEARTBEAT` or a `POINTER` as a tile draw would corrupt the canvas; `ScreenCanvas.Apply` ignores everything that
+  is not `DRAW`/`MOVE`/`CLEAR`.
 
 ## 2. Tile asset — `assets/ab/cd/<16 hex digits>.tile`
 

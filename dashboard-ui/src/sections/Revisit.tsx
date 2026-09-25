@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { IDLE_GAP_OPTIONS, SPEED_OPTIONS } from '../bridge/protocol';
 import {
@@ -22,7 +22,7 @@ import { useRecall } from '../state/RecallContext';
  * screen, which is exactly what "hold the still frame" means in a player that reconstructs from a log.
  */
 export function Revisit() {
-  const { days, daysState, daysError, selectedDay, openDay, sessionState, sessionError } = useRecall();
+  const { days, daysState, daysError, selectedDay, openDay } = useRecall();
 
   return (
     <div className="revisit">
@@ -63,16 +63,7 @@ export function Revisit() {
         )}
       </aside>
 
-      <section className="stage">
-        <VideoStage />
-
-        {sessionState === 'error' ? (
-          <p className="empty empty--error">{sessionError ?? 'That day could not be opened.'}</p>
-        ) : null}
-
-        <TransportBar />
-        <Timeline />
-      </section>
+      <PlayerStage />
 
       <aside className="panel panel--side">
         <ReplayList />
@@ -82,9 +73,195 @@ export function Revisit() {
   );
 }
 
+/** How long the controls stay up in fullscreen with no mouse, click or key. Standard-player territory. */
+const CHROME_IDLE_MS = 2600;
+
+/**
+ * The player: the reconstructed screen, its transport and its timeline — plus the mode that hands them the
+ * whole screen.
+ *
+ * Fullscreen is asked for from the browser (`requestFullscreen` on this element) rather than faked with CSS,
+ * because the WPF host follows it: WebView2 reports the fullscreen element, the shell drops its own chrome, and
+ * the picture reaches the edges of the display. When the API is unavailable or the host declines the request,
+ * the same layout is applied as an overlay inside the window, so the mode never silently does nothing.
+ *
+ * The controls behave the way a player's do: in fullscreen they fade out after a few idle seconds and come back
+ * on the smallest sign of life — a mouse move, a click or a key — unless the pointer is parked on them. Leaving
+ * fullscreen always brings them back.
+ */
+function PlayerStage() {
+  const { session, sessionState, sessionError } = useRecall();
+  const playerRef = useRef<HTMLElement | null>(null);
+  const [fullscreen, setFullscreen] = useState(false);
+  const [filling, setFilling] = useState(false);
+  const [idle, setIdle] = useState(false);
+  const hideTimer = useRef<number | null>(null);
+  const overChrome = useRef(false);
+
+  const immersive = fullscreen || filling;
+
+  const stopHideTimer = useCallback(() => {
+    if (hideTimer.current !== null) {
+      window.clearTimeout(hideTimer.current);
+      hideTimer.current = null;
+    }
+  }, []);
+
+  /** The controls are on screen; start the countdown that takes them away again. */
+  const wakeChrome = useCallback(() => {
+    setIdle(false);
+    stopHideTimer();
+
+    // Parked on the controls: they stay until the pointer leaves. A player that hides the button you are
+    // reaching for is a player nobody can drive.
+    if (overChrome.current) {
+      return;
+    }
+
+    hideTimer.current = window.setTimeout(() => {
+      hideTimer.current = null;
+      setIdle(true);
+    }, CHROME_IDLE_MS);
+  }, [stopHideTimer]);
+
+  const holdChrome = useCallback(() => {
+    overChrome.current = true;
+    setIdle(false);
+    stopHideTimer();
+  }, [stopHideTimer]);
+
+  const releaseChrome = useCallback(() => {
+    overChrome.current = false;
+    wakeChrome();
+  }, [wakeChrome]);
+
+  // Only fullscreen hides anything. Leaving it — by this handler, by Esc, or because the host went back to a
+  // window — must never leave the player without a transport bar, so every path lands in this effect.
+  useEffect(() => {
+    if (!immersive) {
+      stopHideTimer();
+      setIdle(false);
+      return;
+    }
+
+    wakeChrome();
+    return stopHideTimer;
+  }, [immersive, wakeChrome, stopHideTimer]);
+
+  // A key press is a sign of life too: space, the arrows and the step keys all mean someone is driving.
+  useEffect(() => {
+    if (!immersive) return;
+
+    const onKey = () => wakeChrome();
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [immersive, wakeChrome]);
+
+  // The browser is the authority on whether an element is fullscreen: Esc, a host that leaves on its own and
+  // any window-manager gesture all arrive only as this event.
+  useEffect(() => {
+    const onChange = () => {
+      const own = document.fullscreenElement !== null;
+      setFullscreen(own);
+      if (!own) setFilling(false);
+    };
+
+    document.addEventListener('fullscreenchange', onChange);
+    return () => document.removeEventListener('fullscreenchange', onChange);
+  }, []);
+
+  const enterFullscreen = useCallback(async () => {
+    const node = playerRef.current;
+    if (!node || document.fullscreenElement) return;
+
+    if (document.fullscreenEnabled && typeof node.requestFullscreen === 'function') {
+      try {
+        await node.requestFullscreen();
+        setFilling(false);
+        return;
+      } catch {
+        // WebView2 can refuse the request. The mode still has to work, so it falls through to the overlay.
+      }
+    }
+
+    setFilling(true);
+  }, []);
+
+  const exitFullscreen = useCallback(async () => {
+    if (document.fullscreenElement) {
+      try {
+        await document.exitFullscreen();
+      } catch {
+        // The browser got there first; the state follows on `fullscreenchange`.
+      }
+      return;
+    }
+
+    setFilling(false);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (!session) return; // nothing to watch yet
+    void (immersive ? exitFullscreen() : enterFullscreen());
+  }, [session, immersive, enterFullscreen, exitFullscreen]);
+
+  // The app shell owns the keyboard and announces intent, exactly as it does for play/pause and stepping; the
+  // mode that acts on fullscreen is the one whose state lives here. Esc is handled here too: browsers and
+  // WebView2 leave fullscreen on their own, but the in-window overlay has no such binding.
+  useEffect(() => {
+    const onToggle = () => toggleFullscreen();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && immersive) {
+        void exitFullscreen();
+      }
+    };
+
+    window.addEventListener('screen-recall:toggle-fullscreen', onToggle);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('screen-recall:toggle-fullscreen', onToggle);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [immersive, toggleFullscreen, exitFullscreen]);
+
+  const playerClass = [
+    'stage',
+    'player',
+    immersive ? 'player--immersive' : '',
+    filling ? 'player--fill' : '',
+    idle ? 'player--idle' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  return (
+    <section ref={playerRef} className={playerClass} onMouseMove={wakeChrome} onPointerDown={wakeChrome}>
+      {/* Double-click on the picture, not the whole stage: a double-click on a button is not a request to
+          change mode. */}
+      <div className="player__video" onDoubleClick={toggleFullscreen}>
+        <VideoStage />
+      </div>
+
+      {sessionState === 'error' ? (
+        <p className="empty empty--error player__error">{sessionError ?? 'That day could not be opened.'}</p>
+      ) : null}
+
+      <div className="player__chrome" onMouseEnter={holdChrome} onMouseLeave={releaseChrome}>
+        <TransportBar fullscreen={immersive} onToggleFullscreen={toggleFullscreen} />
+        <Timeline />
+        {immersive ? (
+          <p className="player__hint">
+            Esc leaves full screen · F toggles it · the controls hide when the mouse stops moving
+          </p>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
 /** The reconstructed screen. Frames arrive already RGBA and are blitted as-is. */
 function VideoStage() {
-  const { bridge, frameSize, session, playing } = useRecall();
+  const { bridge, frameSize, session, playing, gaps, positionUs } = useRecall();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [drew, setDrew] = useState(false);
 
@@ -119,9 +296,30 @@ function VideoStage() {
     return off;
   }, [bridge]);
 
+  // A frozen frame across a stretch nobody recorded is the one thing playback must not pretend. The held frame is
+  // hidden rather than dimmed, and the card that replaces it is vector — DOM plus inline SVG — so it stays crisp at
+  // any window size and can never be mistaken for something that was on screen.
+  const gap = session ? gaps.find((item) => positionUs >= item.startUs && positionUs <= item.endUs) : undefined;
+
   return (
-    <div className="screen" data-testid="screen">
+    <div className={gap ? 'screen screen--gap' : 'screen'} data-testid="screen">
       <canvas ref={canvasRef} className="screen__canvas" width={frameSize?.width ?? 16} height={frameSize?.height ?? 16} />
+      {gap ? (
+        <div className="screen__gap" role="status" aria-live="polite">
+          <svg className="screen__gap-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+            <rect x="3" y="17" width="40" height="29" rx="5" />
+            <path d="M43 28.5l15-9v25l-15-9z" />
+            <circle cx="23" cy="31.5" r="8.5" />
+            <line className="screen__gap-slash" x1="9" y1="56" x2="56" y2="8" />
+          </svg>
+          <p className="screen__gap-title">Recording unavailable</p>
+          <p className="screen__gap-meta">{fmtDuration(gap.durationUs)} not recorded</p>
+          <p className="screen__gap-note">
+            {gap.reason} — the frame behind this card is the last one before it, so it stays hidden instead of standing
+            in for what is on screen now.
+          </p>
+        </div>
+      ) : null}
       {!drew ? (
         <div className="screen__placeholder">
           {session ? (
@@ -139,8 +337,11 @@ function VideoStage() {
   );
 }
 
-/** Play/pause, stepping, rate, quiet-skipping and frame export. */
-function TransportBar() {
+/**
+ * Play/pause, stepping, rate, quiet-skipping, frame export and the fullscreen toggle. The toggle is handed
+ * down rather than read from context: the mode belongs to the stage, and the stage is the element it applies to.
+ */
+function TransportBar({ fullscreen, onToggleFullscreen }: { fullscreen: boolean; onToggleFullscreen: () => void }) {
   const {
     session,
     playing,
@@ -210,6 +411,17 @@ function TransportBar() {
       <button type="button" className="btn btn--ghost" onClick={savePng} disabled={!session}>
         Save PNG
       </button>
+
+      <button
+        type="button"
+        className="btn btn--ghost"
+        onClick={onToggleFullscreen}
+        disabled={!session}
+        aria-pressed={fullscreen}
+        title={fullscreen ? 'Leave full screen (Esc)' : 'Full screen (F, or double-click the picture)'}
+      >
+        {fullscreen ? '⤡ Exit full screen' : '⛶ Full screen'}
+      </button>
     </div>
   );
 }
@@ -225,6 +437,7 @@ function Timeline() {
     durationUs,
     positionUs,
     idles,
+    gaps,
     spans,
     idleMinGapUs,
     setIdleMinGapUs,
@@ -240,6 +453,17 @@ function Timeline() {
   return (
     <div className="timeline">
       <div className="timeline__marks" aria-hidden="true">
+        {gaps.map((gap) => (
+          <span
+            key={`gap-${gap.startUs}`}
+            className="timeline__gap"
+            style={{
+              left: `${progressOf(gap.startUs, firstUs, span) * 100}%`,
+              width: `${Math.max(0.2, (gap.durationUs / span) * 100)}%`,
+            }}
+            title={`not recorded for ${fmtDuration(gap.durationUs)} — ${gap.reason}`}
+          />
+        ))}
         {idles.map((idle) => (
           <span
             key={`idle-${idle.startUs}`}
@@ -291,6 +515,7 @@ function Timeline() {
       <div className="timeline__foot">
         <span className="timeline__legend">
           <i className="swatch swatch--idle" /> quiet {idles.length}
+          <i className="swatch swatch--gap" /> not recorded {gaps.length}
           <i className="swatch swatch--tick" /> focus {spans.length}
         </span>
         <label className="field field--inline">

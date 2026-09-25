@@ -26,6 +26,7 @@ internal sealed partial class DesktopDuplicator : IDisposable
     private int _lastPointerX = int.MinValue;
     private int _lastPointerY = int.MinValue;
     private bool _lastPointerVisible;
+    private PointerShape? _pointerShape;
 
     private DesktopDuplicator(
         DxgiOutputTarget target,
@@ -190,15 +191,24 @@ internal sealed partial class DesktopDuplicator : IDisposable
         // Cursor movement and shape updates arrive as metadata, never as dirty rects. Tracking them
         // lets the engine distinguish "the compositor presented for the cursor only" from "something
         // changed but the driver reported no regions", which is what decides whether a full-surface
-        // rescan is actually needed.
+        // rescan is actually needed - and it is also the only place the pointer reaches the recording at all.
+        bool shapeOffered = frameInfo.PointerShapeBufferSize > 0;
         bool pointerUpdate =
-            frameInfo.PointerShapeBufferSize > 0
+            shapeOffered
             || frameInfo.PointerPosition.Position.X != _lastPointerX
             || frameInfo.PointerPosition.Position.Y != _lastPointerY
             || frameInfo.PointerPosition.Visible != _lastPointerVisible;
         _lastPointerX = frameInfo.PointerPosition.Position.X;
         _lastPointerY = frameInfo.PointerPosition.Position.Y;
         _lastPointerVisible = frameInfo.PointerPosition.Visible;
+
+        if (shapeOffered)
+        {
+            // Offered only when it changed, so this decode happens a handful of times per session rather than per
+            // frame. A shape that cannot be decoded keeps the previous one: an older cursor is closer to the truth
+            // than no cursor.
+            _pointerShape = PointerShapeReader.Read(_duplication) ?? _pointerShape;
+        }
 
         return new DuplicatedFrame(
             Monitor,
@@ -215,6 +225,10 @@ internal sealed partial class DesktopDuplicator : IDisposable
         {
             HasPointerUpdate = pointerUpdate,
             ReadbackMs = readbackMs,
+            PointerShape = shapeOffered ? _pointerShape : null,
+            PointerX = frameInfo.PointerPosition.Position.X,
+            PointerY = frameInfo.PointerPosition.Position.Y,
+            PointerVisible = frameInfo.PointerPosition.Visible,
         };
     }
 

@@ -33,6 +33,10 @@ public sealed record ReplayRow(
 /// <summary>A quiet stretch of a day (no entries in it).</summary>
 public sealed record IdleRow(long StartUs, long EndUs, long DurationUs);
 
+/// <summary>A stretch of a day nobody recorded, from <c>{cmd:'gaps'}</c>. Different from <see cref="IdleRow"/>: there
+/// the screen stood still, here it went on changing and none of it exists.</summary>
+public sealed record GapRow(long StartUs, long EndUs, long DurationUs, string Reason);
+
 /// <summary>A focus span, for jump-to-focus.</summary>
 public sealed record SpanRow(string AppName, string WindowTitle, long StartUs, long EndUs, int Count);
 
@@ -107,6 +111,16 @@ public sealed partial class WebDashboardBridge : IDisposable
     public SessionPlayer? Player { get; set; }
 
     /// <summary>
+    /// Called when the page enters or leaves fullscreen — the player's own button, <c>F</c>, a double-click on
+    /// the picture, or Esc.
+    /// </summary>
+    /// <remarks>
+    /// WebView2 gives the fullscreen element the whole control and stops there; making the control the whole
+    /// screen is the shell's job, so the change is reported rather than acted on here.
+    /// </remarks>
+    public Action<bool>? FullScreenChanged { get; set; }
+
+    /// <summary>
     /// Locates the built React app by walking up from the executable, so <c>dotnet run</c> from the repo and a
     /// published layout both work with no configuration. Null when the UI has not been built yet.
     /// </summary>
@@ -161,6 +175,10 @@ public sealed partial class WebDashboardBridge : IDisposable
         core.Settings.AreHostObjectsAllowed = false;
         core.Settings.AreDevToolsEnabled = false;
         core.WebMessageReceived += OnWebMessageReceived;
+
+        // The player's fullscreen button reaches the host as this event. The window follows it through
+        // FullScreenChanged: without that, "fullscreen" would only mean a bigger panel inside the window.
+        core.ContainsFullScreenElementChanged += OnContainsFullScreenElementChanged;
 
         if (!string.IsNullOrWhiteSpace(devServer))
         {
@@ -291,6 +309,22 @@ public sealed partial class WebDashboardBridge : IDisposable
     /// <summary>Sends a one-line notice to the page.</summary>
     public void PushNotice(string message) => Post(new { type = "notice", message });
 
+    /// <summary>
+    /// The page entered or left fullscreen. Esc lands here too: WebView2 leaves fullscreen on its own when the
+    /// user presses it, which is exactly the behaviour a player should have.
+    /// </summary>
+    private void OnContainsFullScreenElementChanged(object? sender, object e)
+    {
+        try
+        {
+            FullScreenChanged?.Invoke(_view.CoreWebView2.ContainsFullScreenElement);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+            // The WebView is going away: there is no window left to resize.
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -300,6 +334,18 @@ public sealed partial class WebDashboardBridge : IDisposable
 
         _disposed = true;
         IsActive = false;
+        try
+        {
+            if (_view.CoreWebView2 is not null)
+            {
+                _view.CoreWebView2.ContainsFullScreenElementChanged -= OnContainsFullScreenElementChanged;
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ObjectDisposedException)
+        {
+            // Already torn down with the WebView.
+        }
+
         _frameBufferA?.Dispose();
         _frameBufferB?.Dispose();
         _frameBufferA = null;

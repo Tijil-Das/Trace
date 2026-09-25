@@ -69,6 +69,24 @@ internal sealed class SourceFrame
     /// <summary>Time the backend spent producing this frame (GPU copy + CPU readback), in ms.</summary>
     internal double ReadbackMs { get; }
 
+    /// <summary>True when DXGI reported a pointer position, visibility or shape change with this frame.</summary>
+    internal bool HasPointerUpdate { get; init; }
+
+    /// <summary>
+    /// Pointer shape to draw from now on, or null when the shape did not change. The pointer is separate state:
+    /// it never appears in <see cref="Pixels"/>, because the compositor draws it above the desktop.
+    /// </summary>
+    internal PointerShape? PointerShape { get; init; }
+
+    /// <summary>Pointer position in monitor pixels, as DXGI reported it.</summary>
+    internal int PointerX { get; init; }
+
+    /// <summary>Pointer position in monitor pixels, as DXGI reported it.</summary>
+    internal int PointerY { get; init; }
+
+    /// <summary>False while the pointer is hidden.</summary>
+    internal bool PointerVisible { get; init; }
+
     /// <summary>True when there is anything to record.</summary>
     internal bool HasChanges => FullRescan || DirtyRects.Count > 0 || MoveRects.Count > 0;
 }

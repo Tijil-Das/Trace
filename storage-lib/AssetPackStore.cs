@@ -65,6 +65,12 @@ public sealed partial class AssetPackStore : IDisposable
         public FileStream? Idx;
         public int CurrentPackId = -1;
         public long CurrentPackLength;
+
+        /// <summary>
+        /// Record bytes committed across all packs. Maintained on every append and delete under <see cref="Gate"/>,
+        /// so readers pay a field load instead of a full index sum.
+        /// </summary>
+        public long PackedBytes;
     }
 
     public AssetPackStore(string assetsRoot, long packBytes = DefaultPackBytes)
@@ -87,6 +93,13 @@ public sealed partial class AssetPackStore : IDisposable
             if (_shared.Index.Count == 0 && _shared.CurrentPackId < 0)
             {
                 LoadIndex();
+                long committedPackBytes = 0;
+                foreach (PackEntry entry in _shared.Index.Values)
+                {
+                    committedPackBytes += entry.RecordLength;
+                }
+
+                _shared.PackedBytes = committedPackBytes;
             }
         }
     }
@@ -103,18 +116,18 @@ public sealed partial class AssetPackStore : IDisposable
         }
     }
 
-    /// <summary>Indexed record bytes across all packs.</summary>
+    /// <summary>
+    /// Indexed record bytes across all packs, from a counter maintained under the write gate — a field load, not
+    /// an index sum. Summing per read is what made every days-list refresh walk every packed tile (~10s for 80k).
+    /// </summary>
     public long Bytes
     {
         get
         {
-            long total = 0;
-            foreach (PackEntry entry in _shared.Index.Values)
+            lock (_shared.Gate)
             {
-                total += entry.RecordLength;
+                return _shared.PackedBytes;
             }
-
-            return total;
         }
     }
 
@@ -194,6 +207,7 @@ public sealed partial class AssetPackStore : IDisposable
 
             _shared.Index[hash] = new PackEntry(_shared.CurrentPackId, offset, header.Length + payload.Length, codecId, width, height);
             _shared.LivePerPack[_shared.CurrentPackId] = _shared.LivePerPack.GetValueOrDefault(_shared.CurrentPackId) + 1;
+            _shared.PackedBytes += header.Length + payload.Length;
             WritesThisInstance++;
             BytesWrittenThisInstance += header.Length + payload.Length;
             return true;
@@ -262,6 +276,8 @@ public sealed partial class AssetPackStore : IDisposable
             {
                 return false;
             }
+
+            _shared.PackedBytes -= entry.RecordLength;
 
             int live = _shared.LivePerPack.GetValueOrDefault(entry.PackId) - 1;
             if (live <= 0)

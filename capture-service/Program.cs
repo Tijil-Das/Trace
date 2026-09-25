@@ -22,6 +22,16 @@ internal static class Program
             return 0;
         }
 
+        // A rejected command line is fatal. Every flag that does nothing is a run that quietly measured the wrong
+        // thing - which is exactly how a "--storage <path>" (really --root) produced numbers attributed to a store
+        // the service was never using (docs/PERFORMANCE.md).
+        if (commandLine.Error is not null)
+        {
+            Console.Error.WriteLine($"error: {commandLine.Error}");
+            Console.Error.WriteLine("Run with --help for the options this build accepts.");
+            return 2;
+        }
+
         bool perUser = !WindowsServiceHelpers.IsWindowsService();
         RecallConfig config = commandLine.LoadConfig(perUser);
 

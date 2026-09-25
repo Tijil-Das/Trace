@@ -229,6 +229,10 @@ internal sealed partial class CaptureEngine : IDisposable
     /// too expensive to do on the thread answering the poll: after the first call the walk is handed to
     /// the thread pool and this returns the last known figures immediately.
     /// </summary>
+    /// <summary>
+    /// Asset count and byte footprint, from cache. A refresh is queued at most once per
+    /// <paramref name="refreshIntervalMs"/> and runs off the capture thread.
+    /// </summary>
     internal (long Count, long Bytes) AssetStats(int refreshIntervalMs = 30_000)
     {
         long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -276,12 +280,18 @@ internal sealed partial class CaptureEngine : IDisposable
     /// </summary>
     private void QueueAssetStatsRefresh(long nowMs)
     {
+        // Timestamped before the single-flight check, not after it. The old order only recorded the attempt when it
+        // won the race, so a walk that outlived its own interval could never register as "just ran": every subsequent
+        // turn of the capture loop found the interval already elapsed, tried to queue again, lost the race, and left
+        // the timestamp stale - so the walk restarted the instant the previous one finished, forever. Recording the
+        // attempt here means a slow walk simply holds the interval open for its own duration.
+        _lastAssetStatsMs = nowMs;
+
         if (Interlocked.CompareExchange(ref _assetStatsRefreshing, 1, 0) != 0)
         {
             return;
         }
 
-        _lastAssetStatsMs = nowMs;
         Task.Run(() =>
         {
             try

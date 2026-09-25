@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 
@@ -27,6 +28,38 @@ public partial class SettingsPanel : System.Windows.Controls.UserControl
 
     /// <summary>Storage root in force, falling back to the per-user default when the service is down.</summary>
     public string StorageRootOrUserDefault() => _loaded?.StoragePath ?? RecallConfig.UserStoragePath();
+
+    /// <summary>
+    /// Reads configuration off disk when the service cannot be asked for it, from the same file the service reads:
+    /// the shared path first, the per-user path second.
+    ///
+    /// This is the bug that left the day list permanently empty. The fallback used to load the per-user config, which
+    /// does not exist on a machine configured for the shared one, and <see cref="ConfigStore.Load"/> answers a missing
+    /// file with defaults — whose storage path (<c>%ProgramData%\ScreenRecall\data</c>) does not exist either. The
+    /// dashboard then walked a directory that was not there and reported "no recorded days" on every refresh, while
+    /// the recorder was writing to the root named in the shared config the entire time. That file is the single source
+    /// of truth (see <see cref="RecallConfig"/>), so it is what this reads.
+    /// </summary>
+    private static RecallConfig LoadConfigOffDisk()
+    {
+        foreach (string path in new[] { RecallConfig.DefaultConfigPath(), RecallConfig.UserConfigPath() })
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    return ConfigStore.Load(path);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Try the next candidate rather than substituting defaults: a config we cannot read is a better guess
+                // than one that points at a store nobody recorded into.
+            }
+        }
+
+        return new RecallConfig();
+    }
 
     /// <summary>Refreshes the live status readout.</summary>
     public void RefreshStatus()
@@ -77,7 +110,7 @@ public partial class SettingsPanel : System.Windows.Controls.UserControl
         if (config is null)
         {
             SettingsStatusText.Text = "service not reachable — showing saved defaults";
-            config = ConfigStore.Load(RecallConfig.UserConfigPath());
+            config = LoadConfigOffDisk();
         }
         else
         {

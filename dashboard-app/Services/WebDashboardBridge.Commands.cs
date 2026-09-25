@@ -220,7 +220,33 @@ public sealed partial class WebDashboardBridge
 
     /// <summary>Days list, newest first. Read off the log files only — no tile decoding, no store walk.</summary>
     private void PushDays()
-        => PushOffThread(() => new { type = "days", days = BuildDays(_storageRoot()) });
+        => PushOffThread(() => new { type = "days", days = DaysFor(_storageRoot()) });
+
+    /// <summary>
+    /// The day list for a root, cached briefly.
+    ///
+    /// Building it is not cheap on a long-running store: every log segment of every day is scanned for its entry count
+    /// (a 697 MB day log on this machine) and every day folder is walked for its size. That can outlast the page's
+    /// eight-second reply budget, so the first request after startup may lose that race — and without a cache the
+    /// user's retry re-ran the whole thing and lost it again, which is why refreshing never produced a list. The first
+    /// build is still slow; every request until the window expires is now answered from memory.
+    /// </summary>
+    private List<DayRow> DaysFor(string root)
+    {
+        long now = Environment.TickCount64;
+        if (_daysCache is not null
+            && string.Equals(_daysCacheRoot, root, StringComparison.OrdinalIgnoreCase)
+            && now - _daysCacheTicks < DaysCacheMs)
+        {
+            return _daysCache;
+        }
+
+        List<DayRow> rows = BuildDays(root);
+        _daysCache = rows;
+        _daysCacheRoot = root;
+        _daysCacheTicks = now;
+        return rows;
+    }
 
     private void PushReplays(string day)
         => PushOffThread(() => new

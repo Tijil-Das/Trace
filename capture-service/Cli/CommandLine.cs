@@ -54,6 +54,18 @@ internal sealed class CommandLine
 
     internal string[] Raw { get; private set; } = Array.Empty<string>();
 
+    /// <summary>
+    /// Why the command line was rejected, or null when it was accepted.
+    ///
+    /// An unrecognized option used to fall through this parser's switch with no <c>default</c> case, so it was
+    /// silently ignored - which is how a run against a store nobody asked for reported plausible-looking numbers,
+    /// because <c>--storage &lt;path&gt;</c> was not a real flag (the real one is <c>--root</c>) and nothing said so.
+    /// A flag that does nothing is worse than a flag that fails: the run looks like it worked.
+    /// </summary>
+    internal string? Error { get; private set; }
+
+    private void Reject(string message) => Error ??= message;
+
     internal static CommandLine Parse(string[] args)
     {
         CommandLine result = new() { Raw = args };
@@ -169,6 +181,22 @@ internal sealed class CommandLine
                     if (i + 1 < args.Length)
                     {
                         result.RootOverride = args[++i];
+                    }
+                    else
+                    {
+                        result.Reject("--root needs a path");
+                    }
+
+                    break;
+                default:
+                    // An option that is not one is a mistake, and ignoring it silently is how a run against the wrong
+                    // store produced plausible-looking numbers: "--storage <path>" is not a flag here (the real one is
+                    // --root) and nothing complained, so the service happily recorded into whatever the config said.
+                    // A do-nothing flag is worse than a failing one, because the run looks like it worked.
+                    // Bare words are deliberately left alone: the host turns those into configuration keys.
+                    if (arg.StartsWith('-') || arg.StartsWith('/'))
+                    {
+                        result.Reject($"unrecognized option '{arg}'");
                     }
 
                     break;

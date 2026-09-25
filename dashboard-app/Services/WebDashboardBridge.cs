@@ -77,6 +77,15 @@ public sealed partial class WebDashboardBridge : IDisposable
     private bool _useSecondBuffer;
     private bool _disposed;
     private long _lastTransportPushTicks;
+    private List<DayRow>? _daysCache;
+    private string? _daysCacheRoot;
+    private long _daysCacheTicks;
+
+    /// <summary>
+    /// How long a built day list stays valid. It summarises files that only change while a recording runs, so a short
+    /// window keeps a refresh cheap without showing stale days for long.
+    /// </summary>
+    private const int DaysCacheMs = 30_000;
 
     public WebDashboardBridge(WebView2 view, CaptureClient client, Func<string> storageRoot)
     {

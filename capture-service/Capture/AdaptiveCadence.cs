@@ -25,11 +25,27 @@ internal sealed class AdaptiveCadence
     /// </summary>
     internal const int MaxPaceMs = 250;
 
+    /// <summary>
+    /// Shortest pause the governor inserts between iterations while pacing is enabled.
+    ///
+    /// The duty cycle alone cannot bound the loop, because a duty cycle of "<c>t</c> ms of work per iteration" is
+    /// only a rate limit while <c>t</c> is non-zero: with a measured cost of zero the interval is zero, and a rate
+    /// limit of zero milliseconds per frame permits an unbounded rate. That is not a hypothetical - it is what a
+    /// cheap frame path produces by construction, and the packed store (spec 5.3) made the frame path almost free.
+    /// The loop then re-acquired frames as fast as the CPU allowed while the screen barely changed: 82% of a core on
+    /// a real desktop and 112.9% on an empty store with nothing whatsoever to record.
+    ///
+    /// 15 ms caps the loop at ~66 iterations a second - above a 60 Hz compositor, so a desktop that is actually
+    /// changing is still sampled at its full rate, and low enough that empty frames cannot pin a core.
+    /// </summary>
+    internal const int MinPaceMs = 15;
+
     private readonly int _idlePollMs;
     private readonly int _burstPollMs;
     private readonly double _budgetMsPerFrame;
 
     private double _ewmaFrameMs;
+    private double _ewmaIterationMs;
     private double _ewmaIdleMs;
     private double _paceMs;
     private int _consecutiveIdleFrames;
@@ -68,24 +84,44 @@ internal sealed class AdaptiveCadence
     /// Measured on a live desktop that meant 6,201 frames in 1,779 s with the self-throttle pinned at maximum and
     /// no effect at all.
     ///
-    /// The pace is a duty cycle: if a frame costs <c>t</c> milliseconds of CPU, then running one every
-    /// <c>t / share</c> keeps the frame path inside its share of the machine. Cheap frames (a cursor move) are
-    /// barely paced; expensive ones back off until the cost fits, and the self-throttle widens it further when
-    /// per-frame cost keeps trending above budget (spec 5.8).
+    /// The pace is a duty cycle: if an iteration costs <c>t</c> milliseconds of CPU, then running one every
+    /// <c>t / share</c> keeps the frame path inside its share of the machine. Cheap iterations sit at the floor,
+    /// expensive ones back off until the cost fits, and the self-throttle widens it further when the cost keeps
+    /// trending above budget (spec 5.8).
+    ///
+    /// The cost is measured over the <b>whole iteration</b>, not just <c>ProcessFrame</c>, and the interval is
+    /// floored at <see cref="MinPaceMs"/>. Both are load-bearing, and both are scar tissue. The frame cost alone is
+    /// not a usable denominator: it can measure zero - the packed store made it almost free - and a duty cycle
+    /// against a zero measurement collapses to a zero interval, which is not a pace at all. Measuring the iteration
+    /// instead (acquire + process + bookkeeping, which is never free) and flooring the result means a cheap frame
+    /// path is paced rather than exempted.
     /// </summary>
     internal TimeSpan NextDelay()
     {
-        if (_ewmaFrameMs <= 0 || _maxPaceMs <= 0)
+        // The one legitimate way to run unpaced, and it is a configuration decision rather than a measurement
+        // outcome: the pipeline tests assert invariants over a full-speed source, so they disable pacing outright.
+        if (_maxPaceMs <= 0)
         {
             _paceMs = 0;
             return TimeSpan.Zero;
         }
 
+        int floorMs = Math.Min(MinPaceMs, _maxPaceMs);
+
+        // Nothing measured yet is not the same thing as measured-as-free. Before the first iteration lands, pace at
+        // the floor rather than not at all, so a recorder can never open by running unpaced.
+        double costMs = Math.Max(_ewmaFrameMs, _ewmaIterationMs);
+        if (costMs <= 0)
+        {
+            _paceMs = floorMs;
+            return TimeSpan.FromMilliseconds(_paceMs);
+        }
+
         double allowanceMsPerSecond = FrameCpuSharePercent / 100.0 * Environment.ProcessorCount * 1000.0;
-        double intervalMs = 1000.0 * _ewmaFrameMs / Math.Max(1.0, allowanceMsPerSecond);
+        double intervalMs = 1000.0 * costMs / Math.Max(1.0, allowanceMsPerSecond);
         intervalMs *= 1 + (0.5 * _throttleLevel);
 
-        _paceMs = Math.Clamp(intervalMs, 0, _maxPaceMs);
+        _paceMs = Math.Clamp(intervalMs, floorMs, _maxPaceMs);
         return TimeSpan.FromMilliseconds(_paceMs);
     }
 
@@ -132,10 +168,37 @@ internal sealed class AdaptiveCadence
         }
     }
 
+    /// <summary>
+    /// Records a frame that was acquired but carried nothing to record.
+    ///
+    /// This is the third case the cadence has to count, and the one it used to miss entirely.
+    /// <see cref="OnIdle"/> runs only when an acquire <i>times out</i> and <see cref="OnFrameProcessed"/> only when
+    /// a frame had content, so a desktop that keeps presenting frames with nothing in them - an animated cursor over
+    /// a static window, a blinking caret, a chatty compositor - moved neither counter. <c>_consecutiveIdleFrames</c>
+    /// stayed at zero, which pinned <see cref="NextTimeout"/> at the burst timeout (0 ms by default), and because a
+    /// frame was always ready the loop never blocked on the acquire either. It re-acquired at CPU speed.
+    ///
+    /// Counting it as idle is the correct reading of the situation: a frame with nothing in it is idle time that
+    /// happened to arrive as a frame, and the acquire timeout should back off for it exactly as it does for silence.
+    /// </summary>
+    internal void OnFrameWithoutChanges() => OnIdle(TimeSpan.Zero);
+
+    /// <summary>
+    /// Records the cost of one whole loop turn - acquire, process and bookkeeping - which is the denominator the
+    /// duty cycle is measured against. Kept separate from <see cref="OnFrameProcessed"/> so the throttle still judges
+    /// frame cost against its budget, while the pace follows a number that cannot be zero.
+    /// </summary>
+    internal void OnIteration(double iterationMs)
+        => _ewmaIterationMs = _ewmaIterationMs == 0 ? iterationMs : (_ewmaIterationMs * 0.8) + (iterationMs * 0.2);
+
+    /// <summary>Smoothed cost of a whole loop iteration, in milliseconds.</summary>
+    internal double AverageIterationMs => _ewmaIterationMs;
+
     /// <summary>Resets smoothing after a session rebuild or a configuration change.</summary>
     internal void Reset()
     {
         _ewmaFrameMs = 0;
+        _ewmaIterationMs = 0;
         _ewmaIdleMs = 0;
         _paceMs = 0;
         _consecutiveIdleFrames = 0;

@@ -52,6 +52,7 @@ internal sealed partial class CaptureEngine
                 // would otherwise be hashed from pixels belonging to an earlier frame.
                 _source.FullFrameRequired = _forceFullRescan || _owedRescan;
 
+                long iterationTicks = Stopwatch.GetTimestamp();
                 TimeSpan timeout = _cadence.NextTimeout();
                 long acquireTicks = Stopwatch.GetTimestamp();
                 bool acquired = _source.TryAcquire(timeout, out SourceFrame frame);
@@ -90,18 +91,33 @@ internal sealed partial class CaptureEngine
                     _cadence.OnFrameProcessed(processMs);
                     _stats.AverageFrameMs = Math.Round(_cadence.AverageFrameMs, 2);
                     _stats.ThrottleLevel = _cadence.ThrottleLevel;
-                    _stats.PaceIntervalMs = Math.Round(_cadence.PaceIntervalMs, 1);
+                }
+                else
+                {
+                    // Acquired, but with nothing in it to record. That is idle time for cadence purposes, and it used
+                    // to go uncounted: OnIdle only runs when an acquire times out and OnFrameProcessed only when a
+                    // frame had content, so a desktop presenting empty frames left the idle counter at zero and the
+                    // acquire timeout pinned at the burst timeout. See AdaptiveCadence.OnFrameWithoutChanges.
+                    _cadence.OnFrameWithoutChanges();
+                }
 
-                    // The loop paces itself here rather than relying on the acquire timeout. A desktop that
-                    // presents changes 60 times a second would otherwise be processed 60 times a second, because
-                    // the only other lever - the timeout handed to AcquireNextFrame - does nothing at all while a
-                    // frame is always ready (spec 5.1 / 5.8).
-                    TimeSpan pace = _cadence.NextDelay();
-                    if (pace > TimeSpan.Zero)
-                    {
-                        _stats.FramesPaced++;
-                        Thread.Sleep(pace);
-                    }
+                // The pace is measured over the whole turn - acquire, process and bookkeeping - rather than over
+                // ProcessFrame alone, because the frame cost can legitimately measure zero and a duty cycle against a
+                // zero measurement has no rate limit in it at all.
+                _cadence.OnIteration(Stopwatch.GetElapsedTime(iterationTicks).TotalMilliseconds);
+
+                // Every iteration is paced: not only the ones that recorded something, and not only while the last
+                // frame measured expensive. Two separate holes met here. The pace was skipped whenever the measured
+                // frame cost was zero, which a cheap frame path makes normal rather than rare. And it was skipped for
+                // a frame with no changes at all, which is the one case the acquire timeout cannot cover, because in
+                // that state a frame is always ready and AcquireNextFrame returns immediately however long a timeout
+                // it was handed. Either hole leaves this loop re-acquiring at CPU speed (spec 5.1 / 5.8).
+                _stats.PaceIntervalMs = Math.Round(_cadence.PaceIntervalMs, 1);
+                TimeSpan pace = _cadence.NextDelay();
+                if (pace > TimeSpan.Zero)
+                {
+                    _stats.FramesPaced++;
+                    Thread.Sleep(pace);
                 }
 
                 Maintenance();

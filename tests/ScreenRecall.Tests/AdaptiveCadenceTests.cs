@@ -62,11 +62,72 @@ public sealed class AdaptiveCadenceTests
     }
 
     [Fact]
-    public void AnUntouchedCadenceDoesNotPaceAtAll()
+    public void AnUnmeasuredCadencePacesAtTheFloorRatherThanRunningFree()
+    {
+        // This test used to assert TimeSpan.Zero here, and that assertion was the regression in miniature: the same
+        // early-out that answered "nothing measured yet" also answered "measured, and the cost was zero", which is
+        // what a cheap frame path reports. Both meant "do not pace", and an unpaced loop is a spinning loop.
+        AdaptiveCadence cadence = new(idlePollMs: 1000, burstPollMs: 0);
+        Assert.Equal(TimeSpan.FromMilliseconds(AdaptiveCadence.MinPaceMs), cadence.NextDelay());
+        Assert.Equal(AdaptiveCadence.MinPaceMs, cadence.PaceIntervalMs);
+    }
+
+    [Fact]
+    public void AZeroCostIterationIsPacedAtTheFloorAndNeverRunsFree()
+    {
+        // The exact state that pinned a core: frame cost measures zero, so the duty cycle computes a zero interval.
+        // Zero milliseconds of pause per frame is an unbounded rate, not a rate limit, so the floor is what answers.
+        AdaptiveCadence cadence = new(idlePollMs: 1000, burstPollMs: 0);
+        cadence.OnFrameProcessed(0);
+        cadence.OnIteration(0);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(AdaptiveCadence.MinPaceMs), cadence.NextDelay());
+        Assert.True(cadence.PaceIntervalMs > 0, "a governed cadence may not settle on zero pace");
+
+        // A real iteration cost is the denominator, so a loop whose bookkeeping is measurable paces by that even
+        // while the frame itself is free.
+        AdaptiveCadence measured = new(idlePollMs: 1000, burstPollMs: 0);
+        measured.OnFrameProcessed(0);
+        measured.OnIteration(8);
+        Assert.True(
+            measured.NextDelay().TotalMilliseconds > AdaptiveCadence.MinPaceMs,
+            "an iteration that costs 8 ms should pace well above the floor");
+    }
+
+    [Fact]
+    public void AFrameWithNoChangesCountsAsIdleSoTheAcquireTimeoutBacksOff()
+    {
+        // The third case. Acquired, but nothing in it: neither OnIdle (no timeout) nor OnFrameProcessed (no content)
+        // ran, so the idle counter stayed at zero and the acquire timeout stayed at the burst value forever.
+        AdaptiveCadence cadence = new(idlePollMs: 1000, burstPollMs: 0);
+        cadence.OnFrameProcessed(5); // a frame with content: bursts are still reacted to immediately
+        Assert.Equal(TimeSpan.Zero, cadence.NextTimeout());
+
+        for (int i = 0; i < 8; i++)
+        {
+            cadence.OnFrameWithoutChanges();
+        }
+
+        // Empty frames back the timeout off exactly as silence does.
+        Assert.Equal(TimeSpan.FromMilliseconds(960), cadence.NextTimeout());
+    }
+
+    [Fact]
+    public void ResetClearsThePaceAndTheThrottle()
     {
         AdaptiveCadence cadence = new(idlePollMs: 1000, burstPollMs: 0);
-        Assert.Equal(TimeSpan.Zero, cadence.NextDelay());
+        for (int i = 0; i < 60; i++)
+        {
+            cadence.OnFrameProcessed(20);
+        }
+
+        cadence.Reset();
+
+        Assert.Equal(0, cadence.ThrottleLevel);
         Assert.Equal(0, cadence.PaceIntervalMs);
+
+        // Reset returns the governor to its unmeasured state, which paces at the floor - not to "unpaced".
+        Assert.Equal(TimeSpan.FromMilliseconds(AdaptiveCadence.MinPaceMs), cadence.NextDelay());
     }
 
     [Fact]
@@ -88,21 +149,5 @@ public sealed class AdaptiveCadenceTests
         // always has a frame ready, which is the bug this replaced.
         throttled.OnIdle(TimeSpan.FromMilliseconds(10));
         Assert.True(throttled.NextTimeout() <= TimeSpan.FromMilliseconds(1000));
-    }
-
-    [Fact]
-    public void ResetClearsThePaceAndTheThrottle()
-    {
-        AdaptiveCadence cadence = new(idlePollMs: 1000, burstPollMs: 0);
-        for (int i = 0; i < 60; i++)
-        {
-            cadence.OnFrameProcessed(20);
-        }
-
-        cadence.Reset();
-
-        Assert.Equal(0, cadence.ThrottleLevel);
-        Assert.Equal(0, cadence.PaceIntervalMs);
-        Assert.Equal(TimeSpan.Zero, cadence.NextDelay());
     }
 }

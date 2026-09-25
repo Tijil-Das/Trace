@@ -3,9 +3,11 @@ setlocal EnableExtensions EnableDelayedExpansion
 REM ============================================================================
 REM  Trace — one entry point for the whole app.
 REM
-REM    Trace.cmd            build what is missing, start recorder, start dashboard
+REM    Trace.cmd            build what is missing, then start the whole app (recorder + dashboard).
+REM                        This file is the single entry point: double-click it to start Trace.
 REM    Trace.cmd start      same as above
-REM    Trace.cmd stop       ask the recorder to stop, then close the dashboard
+REM    Trace.cmd stop       stop the whole app — dashboard, its WebView2 children, then the recorder
+REM                        (gracefully, so the last log interval is flushed) — and verify it stopped
 REM    Trace.cmd restart    stop, then start
 REM    Trace.cmd status     what is running, what is registered, what it costs
 REM    Trace.cmd build      build the .NET solution (Release)
@@ -114,17 +116,34 @@ REM because a killed recorder loses whatever it had not yet flushed.
 REM
 REM The send-and-wait is one PowerShell process on purpose: a cmd loop polling with a PowerShell call per
 REM second spends more time starting shells than waiting, and the drain can legitimately take ~20 seconds.
+REM The dashboard goes first: it can start the recorder for you, so closing it before stopping the recorder
+REM removes anything that could bring the recorder back up behind us. It holds no state that needs flushing.
+call :stop_dashboard
+
 > "%TEMP%\trace-shutdown.json" echo {"Id":1,"Command":"shutdown"}
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$errorActionPreference = 'SilentlyContinue'; $name = 'ScreenRecall.CaptureService'; if (-not (Get-Process -Name $name)) { Write-Host '[stop] the recorder is not running'; exit 0 }; $p = New-Object System.IO.Pipes.NamedPipeClientStream('.', '%PIPE%', [System.IO.Pipes.PipeDirection]::InOut); try { $p.Connect(2000); $w = New-Object System.IO.StreamWriter($p); $w.AutoFlush = $true; $w.WriteLine((Get-Content -Raw '%TEMP%\trace-shutdown.json')); $r = New-Object System.IO.StreamReader($p); [void]$r.ReadLine(); Write-Host '[stop] asked the recorder to shut down' } catch { Write-Host '[stop] the recorder did not accept the request' } finally { $p.Dispose() }; $waited = 0; while ((Get-Process -Name $name) -and $waited -lt 25) { Start-Sleep -Milliseconds 500; $waited += 0.5 }; if (Get-Process -Name $name) { Write-Host ('[stop] still running after ' + $waited + 's -- terminating (the last flush interval may be missing)'); Stop-Process -Name $name -Force; Start-Sleep -Seconds 2; if (Get-Process -Name $name) { Write-Host '[stop] WARNING: the recorder is still running' } else { Write-Host '[stop] recorder terminated' } } else { Write-Host ('[stop] recorder stopped cleanly after ' + $waited + 's (it wrote out what it had)') }"
 
+REM Final word on whether it actually stopped. A stopper that prints success while something is still holding
+REM the store open is worse than no stopper: the next start then contends with a process nobody knows about.
+powershell -NoProfile -Command "$left = @(Get-Process -Name 'ScreenRecall.CaptureService','ScreenRecall.Dashboard' -ErrorAction SilentlyContinue); if ($left.Count -eq 0) { Write-Host '[stop] Trace stopped - nothing left running' } else { Write-Host ('[stop] WARNING: still running: ' + (($left | ForEach-Object { $_.ProcessName }) -join ', ')) }"
+
+goto :eof
+
+REM --------------------------------------------------------- stop dashboard ----
 :stop_dashboard
+REM Killing the dashboard host leaves its WebView2 children orphaned - they keep their user-data folder open and
+REM keep working, so the app looks stopped while it is not. They are matched by that folder rather than by image
+REM name, because msedgewebview2.exe is shared with every other WebView2 app on the machine and killing those
+REM would be someone else's crash.
 tasklist /fi "imagename eq ScreenRecall.Dashboard*" 2>nul | find /i "ScreenRecall.Dashboard.ex" >nul
-if not errorlevel 1 (
-  echo [stop] dashboard
-  taskkill /f /im ScreenRecall.Dashboard.exe >nul 2>&1
+if errorlevel 1 (
+  echo [stop] dashboard: not running
 ) else (
-  echo [stop] the dashboard is not running
+  echo [stop] dashboard: closing
+  taskkill /f /im ScreenRecall.Dashboard.exe >nul 2>&1
+  powershell -NoProfile -Command "$n = 'ScreenRecall.Dashboard'; $w = 0; while ((Get-Process -Name $n -ErrorAction SilentlyContinue) -and $w -lt 10) { Start-Sleep -Milliseconds 250; $w += 0.25 }; if (Get-Process -Name $n -ErrorAction SilentlyContinue) { Write-Host '[stop] dashboard: WARNING - still running' } else { Write-Host ('[stop] dashboard: closed after ' + $w + 's') }"
 )
+powershell -NoProfile -Command "$ui = Join-Path $env:TEMP 'ScreenRecall.WebView2'; $o = @(Get-CimInstance Win32_Process -Filter 'Name = ''msedgewebview2.exe''' -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -and $_.CommandLine -like ('*' + $ui + '*') }); if ($o.Count -eq 0) { Write-Host '[stop] webview2: nothing orphaned' } else { foreach ($p in $o) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }; Write-Host ('[stop] webview2: cleaned up ' + $o.Count + ' orphaned process(es)') }"
 goto :eof
 
 REM ------------------------------------------------------------- restart -----
